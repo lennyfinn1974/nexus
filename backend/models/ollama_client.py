@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
-import httpx
 import logging
-from typing import Any, AsyncGenerator
+from collections.abc import AsyncGenerator
+from typing import Any
+
+import httpx
 
 logger = logging.getLogger("nexus.ollama")
 
@@ -100,7 +102,7 @@ class OllamaClient:
 
             return result
         except httpx.TimeoutException:
-            raise TimeoutError(f"Ollama request timed out after 180s")
+            raise TimeoutError("Ollama request timed out after 180s")
         except httpx.HTTPStatusError as e:
             raise RuntimeError(f"Ollama error {e.response.status_code}: {e.response.text}")
 

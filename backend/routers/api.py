@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-import os
+import logging
 import time
 import uuid
-import logging
 from typing import Any
 
+from core.exceptions import PathAccessDeniedError
+from core.security import validate_path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-
 from schemas.api import (
-    StatusResponse, ConversationCreate, ConversationUpdate,
+    ConversationCreate,
+    ConversationUpdate,
+    StatusResponse,
 )
-from core.security import validate_path
-from core.exceptions import PathAccessDeniedError
 from skills.ingest import scan_directory
 
 logger = logging.getLogger("nexus.api")
@@ -73,7 +73,7 @@ async def api_health(request: Request):
 
     # Plugins
     plugin_errors = 0
-    for name, plugin in s.plugin_manager.plugins.items():
+    for _name, plugin in s.plugin_manager.plugins.items():
         if hasattr(plugin, "health_check"):
             try:
                 plugin_health = await plugin.health_check()

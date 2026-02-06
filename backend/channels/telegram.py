@@ -1,8 +1,9 @@
 """Telegram bot integration — bridges Telegram messages to the Nexus backend."""
 
 import logging
+
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 logger = logging.getLogger("nexus.telegram")
 

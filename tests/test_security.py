@@ -1,8 +1,9 @@
 """Security tests -- auth bypass, SSRF, path traversal, injection."""
 
 import os
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 
 class TestAdminAuthBypass:
@@ -61,8 +62,8 @@ class TestPathTraversal:
     @pytest.mark.security
     async def test_path_traversal_blocked(self):
         """validate_path should block directory traversal."""
-        from core.security import validate_path, init_allowed_dirs
         from core.exceptions import PathAccessDeniedError
+        from core.security import init_allowed_dirs, validate_path
 
         init_allowed_dirs("/tmp/test-nexus")
         with pytest.raises(PathAccessDeniedError):
@@ -71,8 +72,8 @@ class TestPathTraversal:
     @pytest.mark.security
     async def test_path_traversal_dotdot(self, tmp_base_dir):
         """Dot-dot traversal should be caught."""
-        from core.security import validate_path, init_allowed_dirs
         from core.exceptions import PathAccessDeniedError
+        from core.security import init_allowed_dirs, validate_path
 
         init_allowed_dirs(str(tmp_base_dir))
         with pytest.raises(PathAccessDeniedError):
@@ -81,7 +82,7 @@ class TestPathTraversal:
     @pytest.mark.security
     async def test_valid_path_allowed(self, tmp_base_dir):
         """Paths inside ALLOWED_DIRS should work."""
-        from core.security import validate_path, init_allowed_dirs
+        from core.security import init_allowed_dirs, validate_path
 
         init_allowed_dirs(str(tmp_base_dir))
         data_dir = str(tmp_base_dir / "data")

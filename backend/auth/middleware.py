@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+
 from fastapi import Request, WebSocket
 from fastapi.responses import JSONResponse
 

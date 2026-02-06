@@ -58,13 +58,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         if path.startswith("/api/auth/"):
             allowed, remaining = self._auth.is_allowed(client_ip)
-            limit = self._auth.max_requests
         elif path.startswith("/api/admin/"):
             allowed, remaining = self._admin.is_allowed(client_ip)
-            limit = self._admin.max_requests
         else:
             allowed, remaining = self._general.is_allowed(client_ip)
-            limit = self._general.max_requests
 
         if not allowed:
             return JSONResponse(

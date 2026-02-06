@@ -1,9 +1,8 @@
 """Document ingestion — reads local files and converts them into skills."""
 
-import os
-import re
-import logging
 import hashlib
+import logging
+import os
 from pathlib import Path
 
 logger = logging.getLogger("nexus.ingest")
@@ -25,7 +24,7 @@ MAX_FILE_SIZE = 10 * 1024 * 1024
 
 def _read_text_file(path):
     """Read a plain text file."""
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    with open(path, encoding="utf-8", errors="replace") as f:
         return f.read()
 
 

@@ -4,10 +4,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
 import jwt
-from sqlalchemy import select, update, delete
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = logging.getLogger("nexus.auth.jwt")
@@ -92,7 +92,7 @@ class JWTManager:
                 .join(User, ActiveSession.user_id == User.id)
                 .where(
                     ActiveSession.refresh_token_hash == token_hash,
-                    ActiveSession.revoked == False,
+                    not ActiveSession.revoked,
                     ActiveSession.expires_at > now,
                 )
             )
@@ -153,7 +153,7 @@ class JWTManager:
         async with self._sf() as session:
             result = await session.execute(
                 delete(ActiveSession).where(
-                    (ActiveSession.expires_at < now) | (ActiveSession.revoked == True)
+                    (ActiveSession.expires_at < now) | (ActiveSession.revoked)
                 )
             )
             await session.commit()

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from enum import IntEnum
 from dataclasses import dataclass, field
+from enum import IntEnum
 
 
 class PermissionLevel(IntEnum):

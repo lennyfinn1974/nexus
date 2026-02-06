@@ -1,6 +1,5 @@
 """Tests for REST API endpoints."""
 
-import pytest
 
 
 class TestPublicEndpoints:

@@ -10,34 +10,34 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
+from auth import (
+    AuthAuditLog,
+    IPSecurity,
+    JWTManager,
+    OAuthManager,
+    UserManager,
+)
+from config_manager import MODEL_KEYS, ConfigManager
+from core.security import init_allowed_dirs, validate_path
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
-from config_manager import ConfigManager, MODEL_KEYS
-from models.ollama_client import OllamaClient
-from models.claude_client import ClaudeClient
-from models.router import ModelRouter
-from skills.engine import SkillsEngine
-from skills.ingest import scan_directory, read_file, get_ingest_prompt
-from storage.database import Database
-from storage.engine import init_engine, get_session_factory, dispose_engine
-from storage.encryption import init as init_encryption
-from tasks.queue import TaskQueue
-from plugins.manager import PluginManager
-from websocket_manager import websocket_manager
-from auth import (
-    JWTManager, OAuthManager, UserManager, IPSecurity,
-    AuthMiddleware as AuthSystemMiddleware, authenticate_websocket, AuthAuditLog,
-)
-
 from middleware import (
-    RateLimitMiddleware,
     AuditMiddleware,
     AuthMiddleware,
+    RateLimitMiddleware,
     register_exception_handlers,
 )
-from core.security import init_allowed_dirs, validate_path
+from models.claude_client import ClaudeClient
+from models.ollama_client import OllamaClient
+from models.router import ModelRouter
+from plugins.manager import PluginManager
+from skills.engine import SkillsEngine
+from skills.ingest import get_ingest_prompt, read_file
+from storage.database import Database
+from storage.encryption import init as init_encryption
+from storage.engine import dispose_engine, get_session_factory, init_engine
+from tasks.queue import TaskQueue
 
 logger = logging.getLogger("nexus")
 
@@ -255,7 +255,7 @@ async def lifespan(app: FastAPI):
     if state.cfg.has_telegram:
         try:
             from channels.telegram import TelegramChannel
-            from core.message_processor import process_message, get_status
+            from core.message_processor import get_status, process_message
 
             async def tg_handler(user_id: str, text: str) -> str:
                 return await process_message(
@@ -304,8 +304,8 @@ def create_app() -> FastAPI:
     # Import and include routers
     from admin import router as admin_router
     from routers import api as api_router_mod
-    from routers import ws as ws_router_mod
     from routers import frontend as frontend_router_mod
+    from routers import ws as ws_router_mod
 
     # Initialize frontend with base_dir
     load_dotenv()

@@ -1,6 +1,5 @@
 """Tests for the SQLite database layer."""
 
-import pytest
 
 
 class TestConversations:

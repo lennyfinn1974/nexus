@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from config_manager import ConfigManager
     from plugins.manager import PluginManager
-    from skills.engine import SkillsEngine
 
 
 def build_system_prompt(

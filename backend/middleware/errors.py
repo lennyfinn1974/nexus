@@ -5,18 +5,17 @@ from __future__ import annotations
 import logging
 import traceback
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-
 from core.exceptions import (
+    ModelUnavailableError,
     NexusError,
     PathAccessDeniedError,
     PluginNotFoundError,
     RateLimitExceededError,
-    ToolExecutionError,
-    ModelUnavailableError,
     SkillNotConfiguredError,
+    ToolExecutionError,
 )
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 logger = logging.getLogger("nexus.errors")
 

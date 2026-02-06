@@ -10,9 +10,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import func, select, update, delete, text
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
 from storage.models import Conversation, Message, Skill, Task
 
 logger = logging.getLogger("nexus.storage")

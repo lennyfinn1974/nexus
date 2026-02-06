@@ -1,12 +1,12 @@
 """Admin API — settings, plugins, system management, and log streaming."""
 
-import os
 import asyncio
-import logging
-import json
 import ipaddress
-from datetime import datetime, timezone
+import json
+import logging
+import os
 from collections import deque
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Security
@@ -152,7 +152,7 @@ def validate_url(url: str) -> str:
     except socket.gaierror:
         raise ValueError(f"Could not resolve hostname '{hostname}'")
 
-    for family, _type, _proto, _canonname, sockaddr in resolved_ips:
+    for _family, _type, _proto, _canonname, sockaddr in resolved_ips:
         ip_str = sockaddr[0]
         try:
             addr = ipaddress.ip_address(ip_str)
@@ -377,7 +377,7 @@ async def reload_all_plugins():
 @router.post("/restart")
 async def restart_server():
     """Gracefully restart the Nexus server process."""
-    import sys, signal
+    import sys
 
     logger.info("Server restart requested from admin UI")
 
@@ -472,7 +472,8 @@ async def stream_logs():
 
 @router.get("/system")
 async def get_system_info():
-    import platform, sys
+    import platform
+    import sys
 
     # Get database size from PostgreSQL
     db_size_mb = 0.0
@@ -634,7 +635,7 @@ async def update_user_role(user_id: str, request: Request):
     ok = await _user_manager.update_user_role(user_id, role)
     if not ok:
         raise HTTPException(400, "Invalid role")
-    admin_user = getattr(request.state, "user", None)
+    getattr(request.state, "user", None)
     if _audit_log:
         await _audit_log.log_event("user_role_change", user_id=user_id, details=f"role={role}",
                                    ip_address=request.client.host if request.client else "")

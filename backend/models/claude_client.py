@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-import anthropic
 import logging
-from typing import Any, AsyncGenerator
+from collections.abc import AsyncGenerator
+from typing import Any
+
+import anthropic
 
 logger = logging.getLogger("nexus.claude")
 
@@ -19,7 +21,7 @@ class ClaudeClient:
     async def is_available(self) -> bool:
         """Check if the API key is valid."""
         try:
-            resp = await self._client.messages.create(
+            await self._client.messages.create(
                 model=self.model,
                 max_tokens=10,
                 messages=[{"role": "user", "content": "ping"}],

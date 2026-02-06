@@ -1,8 +1,6 @@
 """Tests for WebSocket connection management."""
 
-import json
-import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 
 class TestWebSocketManager:
@@ -108,8 +106,8 @@ class TestWebSocketManager:
         ws1.send_text = AsyncMock()
         ws2.send_text = AsyncMock()
 
-        id1 = await mgr.connect(ws1)
-        id2 = await mgr.connect(ws2)
+        await mgr.connect(ws1)
+        await mgr.connect(ws2)
 
         await mgr.broadcast({"type": "announcement", "msg": "hello all"})
         assert ws1.send_text.call_count >= 2
@@ -124,7 +122,7 @@ class TestWebSocketManager:
         ws2.send_text = AsyncMock()
 
         id1 = await mgr.connect(ws1)
-        id2 = await mgr.connect(ws2)
+        await mgr.connect(ws2)
 
         initial_count_1 = ws1.send_text.call_count
         await mgr.broadcast({"type": "msg"}, exclude=[id1])

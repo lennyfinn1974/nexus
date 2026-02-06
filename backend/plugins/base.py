@@ -12,7 +12,7 @@ from __future__ import annotations
 import abc
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable
 
 logger = logging.getLogger("nexus.plugins")
 
@@ -49,8 +49,8 @@ class NexusPlugin(abc.ABC):
         self.config = config
         self.db = db
         self.router = router
-        self.tools: List[ToolInfo] = []
-        self.commands: Dict[str, dict] = {}
+        self.tools: list[ToolInfo] = []
+        self.commands: dict[str, dict] = {}
         self.enabled: bool = True
 
     # ── Lifecycle ──
@@ -135,10 +135,10 @@ class NexusPlugin(abc.ABC):
 
     # ── Metadata ──
 
-    def list_tools(self) -> List[str]:
+    def list_tools(self) -> list[str]:
         return [t.name for t in self.tools]
 
-    def list_commands(self) -> List[Dict[str, str]]:
+    def list_commands(self) -> list[dict[str, str]]:
         return [
             {"name": name, "description": info["description"]}
             for name, info in self.commands.items()

@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import json
-import re
-import uuid
 import logging
+import uuid
 from typing import Any
-
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from core.message_processor import process_message, process_skill_actions
 from core.system_prompt import build_system_prompt
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from websocket_manager import websocket_manager
 
 logger = logging.getLogger("nexus.ws")

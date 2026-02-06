@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Any, AsyncGenerator
+from collections.abc import AsyncGenerator
+from typing import Any
 
-from .ollama_client import OllamaClient
 from .claude_client import ClaudeClient
+from .ollama_client import OllamaClient
 
 logger = logging.getLogger("nexus.router")
 

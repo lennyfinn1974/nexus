@@ -8,16 +8,15 @@ On first boot the manager migrates values from .env into the database
 so that existing installations carry over seamlessly.
 """
 
-import os
 import logging
+import os
 from datetime import datetime, timezone
-from typing import Any, Callable, Awaitable, Optional
+from typing import Callable
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-from storage.encryption import encrypt, decrypt
+from storage.encryption import decrypt, encrypt
 from storage.models import Setting, SettingsAudit
 
 logger = logging.getLogger("nexus.config")

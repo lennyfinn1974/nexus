@@ -7,6 +7,7 @@ tables (users, whitelist, sessions, blocked_ips, auth_audit, rate_limits).
 """
 
 from datetime import datetime, timezone
+
 from sqlalchemy import (
     Boolean,
     CheckConstraint,

@@ -12,16 +12,12 @@ handler's tool loop detects tool calls, executes them, feeds results
 back, and lets the AI iterate.
 """
 
-import os
-import re
-import sys
-import json
-import shutil
 import asyncio
 import logging
+import os
+import shutil
+import sys
 import tempfile
-import traceback
-from pathlib import Path
 
 from plugins.base import NexusPlugin
 
@@ -177,7 +173,7 @@ class AgentToolsPlugin(NexusPlugin):
         cmd_lower = command.lower().strip()
         for d in dangerous:
             if d in cmd_lower:
-                return f"⚠ Blocked: potentially dangerous command."
+                return "⚠ Blocked: potentially dangerous command."
 
         try:
             proc = await asyncio.create_subprocess_shell(
@@ -221,7 +217,7 @@ class AgentToolsPlugin(NexusPlugin):
         # Allow access to nexus root and workspace
         if not (p.startswith(os.path.realpath(self.nexus_root)) or
                 p.startswith(os.path.realpath(self.workspace))):
-            raise PermissionError(f"Access denied: path is outside Nexus root")
+            raise PermissionError("Access denied: path is outside Nexus root")
         return p
 
     async def _read_file(self, params):
@@ -235,7 +231,7 @@ class AgentToolsPlugin(NexusPlugin):
             size = os.path.getsize(full)
             if size > 500_000:
                 return f"File too large ({size / 1024:.0f}KB). Use run_bash with head/tail."
-            with open(full, "r", errors="replace") as f:
+            with open(full, errors="replace") as f:
                 content = f.read()
             return f"**{path}** ({size} bytes):\n```\n{content}\n```"
         except PermissionError as e:

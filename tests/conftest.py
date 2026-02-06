@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
 
+
 @compiles(JSONB, "sqlite")
 def _compile_jsonb_sqlite(type_, compiler, **kw):
     return "JSON"
@@ -56,7 +57,7 @@ def tmp_base_dir(tmp_path):
 @pytest_asyncio.fixture
 async def session_factory(tmp_path):
     """Create an async SQLAlchemy session factory backed by SQLite."""
-    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
     from storage.models import Base
 
     db_url = f"sqlite+aiosqlite:///{tmp_path / 'test.db'}"
@@ -93,8 +94,8 @@ async def test_config(session_factory, tmp_base_dir):
     """Create a test ConfigManager with defaults seeded."""
     import config_manager as cm_module
     from config_manager import ConfigManager
-    from storage.encryption import init as init_encryption
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    from storage.encryption import init as init_encryption
 
     init_encryption(str(tmp_base_dir))
 
@@ -243,15 +244,14 @@ async def test_app(
     }
 
     with patch.dict(os.environ, env_patches, clear=False):
+        from admin import init as admin_init
+        from admin import router as admin_router
+        from core.security import init_allowed_dirs
         from fastapi import FastAPI
         from fastapi.middleware.cors import CORSMiddleware
-
-        from admin import router as admin_router, init as admin_init
+        from middleware import AuditMiddleware, AuthMiddleware, RateLimitMiddleware, register_exception_handlers
         from routers import api as api_router_mod
         from routers import frontend as frontend_router_mod
-        from middleware import RateLimitMiddleware, AuditMiddleware, AuthMiddleware
-        from middleware import register_exception_handlers
-        from core.security import init_allowed_dirs
 
         # Initialize allowed dirs for path validation
         init_allowed_dirs(str(tmp_base_dir))

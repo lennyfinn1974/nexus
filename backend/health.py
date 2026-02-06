@@ -4,9 +4,10 @@ and plugin initialization. Returns JSON `{\"status\": \"healthy\"}`
 or `{\"status\": \"unhealthy\", \"detail\": <error>}`.
 """
 
-from fastapi import APIRouter, status
-from pathlib import Path
 import logging
+from pathlib import Path
+
+from fastapi import APIRouter, status
 
 router = APIRouter()
 

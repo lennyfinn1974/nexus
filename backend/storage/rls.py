@@ -9,6 +9,7 @@ multi-user auth is added, swap the `USING (true)` clauses for
 """
 
 import logging
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 

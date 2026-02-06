@@ -1,9 +1,8 @@
 """Async task queue for background research and maintenance."""
 
 import asyncio
-import uuid
 import logging
-from datetime import datetime, timezone
+import uuid
 
 logger = logging.getLogger("nexus.tasks")
 

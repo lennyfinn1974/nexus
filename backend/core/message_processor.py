@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import uuid
-import logging
 from typing import TYPE_CHECKING, Any
 
 from core.security import validate_path
@@ -74,7 +74,7 @@ async def process_message(
         lines = [f"**Documents in** `{cfg.docs_dir}`\n"]
         for f in files:
             lines.append(f"- `{f['relative_path']}` ({f['extension']}, {f['size'] / 1024:.0f}KB)")
-        lines.append(f"\nUse `/ingest <filename>` to learn from a file, or `/ingest all`.")
+        lines.append("\nUse `/ingest <filename>` to learn from a file, or `/ingest all`.")
         return "\n".join(lines)
 
     if text.startswith("/ingest"):

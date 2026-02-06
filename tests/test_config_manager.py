@@ -1,7 +1,6 @@
 """Tests for the database-backed ConfigManager."""
 
 import os
-import pytest
 from unittest.mock import AsyncMock
 
 

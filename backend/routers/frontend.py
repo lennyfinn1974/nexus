@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 from fastapi import APIRouter
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 router = APIRouter(tags=["frontend"])
 

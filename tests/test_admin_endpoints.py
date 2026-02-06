@@ -1,6 +1,5 @@
 """Tests for admin API data endpoints (with valid auth)."""
 
-import pytest
 
 
 class TestAdminDataEndpoints:

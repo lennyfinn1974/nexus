@@ -1,7 +1,8 @@
 """Tests for the model routing logic."""
 
+from unittest.mock import AsyncMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 
 class TestComplexityEstimation:

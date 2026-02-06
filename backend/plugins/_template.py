@@ -16,8 +16,8 @@ Tips:
 - Return False from setup() to gracefully disable the plugin
 """
 
-import os
 import logging
+
 from plugins.base import NexusPlugin
 
 logger = logging.getLogger("nexus.plugins.template")

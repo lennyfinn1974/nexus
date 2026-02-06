@@ -5,8 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from schemas.tools import ToolCall, ToolResult, ToolDefinition, ToolParameter
-from plugins.base import NexusPlugin, ToolInfo
+from schemas.tools import ToolCall, ToolDefinition, ToolParameter, ToolResult
 
 logger = logging.getLogger("nexus.tools")
 

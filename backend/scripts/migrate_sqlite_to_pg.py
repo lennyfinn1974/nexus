@@ -25,31 +25,30 @@ from pathlib import Path
 
 import aiosqlite
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 
 # Ensure backend is importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from storage.engine import init_engine, get_session_factory, dispose_engine
+from storage.engine import dispose_engine, get_session_factory, init_engine
 from storage.models import (
+    ActiveSession,
+    AuthAudit,
     Base,
+    BlockedIP,
     Conversation,
+    InteractionPatternModel,
+    KnowledgeAssociation,
     Message,
-    Skill,
-    Task,
+    ProjectContextModel,
+    SessionContextModel,
     Setting,
     SettingsAudit,
-    UserPreferenceModel,
-    ProjectContextModel,
-    InteractionPatternModel,
-    SessionContextModel,
-    KnowledgeAssociation,
-    UserGoal,
+    Skill,
+    Task,
     User,
+    UserGoal,
+    UserPreferenceModel,
     Whitelist,
-    ActiveSession,
-    BlockedIP,
-    AuthAudit,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

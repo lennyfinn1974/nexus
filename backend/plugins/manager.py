@@ -7,10 +7,10 @@ import importlib.util
 import logging
 import os
 import re
-from typing import Any, Dict, List
+from typing import Any
 
-from .base import NexusPlugin, BasePlugin, ToolInfo
-from .permissions import PermissionLevel, PluginPermissions
+from .base import BasePlugin, NexusPlugin, ToolInfo
+from .permissions import PermissionLevel
 
 logger = logging.getLogger("nexus.plugins")
 
@@ -22,7 +22,7 @@ class PluginManager:
         self.config = config
         self.db = db
         self.router = router
-        self.plugins: Dict[str, NexusPlugin] = {}
+        self.plugins: dict[str, NexusPlugin] = {}
 
     # ── Discovery & Loading ──
 
@@ -36,7 +36,7 @@ class PluginManager:
                 continue
 
             module_name = filename[:-3]  # strip .py
-            plugin_name = module_name.replace("_plugin", "")
+            module_name.replace("_plugin", "")
 
             try:
                 spec = importlib.util.spec_from_file_location(
@@ -153,14 +153,14 @@ class PluginManager:
         return result
 
     @property
-    def all_tools(self) -> List[ToolInfo]:
+    def all_tools(self) -> list[ToolInfo]:
         """Return flat list of all tools across all plugins."""
         tools = []
         for p in self.plugins.values():
             tools.extend(p.tools)
         return tools
 
-    def list_commands(self) -> List[dict]:
+    def list_commands(self) -> list[dict]:
         """Return all slash commands across all plugins."""
         cmds = []
         for p in self.plugins.values():

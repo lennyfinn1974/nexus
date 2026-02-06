@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-
-from schemas.partnerships import PartnerAgent, AgentMessage
+from schemas.partnerships import AgentMessage, PartnerAgent
 
 logger = logging.getLogger("nexus.partnerships")
 

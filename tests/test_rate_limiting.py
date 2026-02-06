@@ -1,7 +1,8 @@
 """Tests for rate limiting middleware."""
 
-import pytest
 import time
+
+import pytest
 
 
 class TestRateLimiter:

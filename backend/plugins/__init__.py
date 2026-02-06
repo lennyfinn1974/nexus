@@ -4,18 +4,18 @@ from __future__ import annotations
 
 from typing import Dict, Type
 
-from .base import NexusPlugin, BasePlugin
+from .base import BasePlugin, NexusPlugin
 
 # Registry populated at runtime by PluginManager
-registered_plugins: Dict[str, NexusPlugin] = {}
+registered_plugins: dict[str, NexusPlugin] = {}
 
 
-def discover_plugins() -> Dict[str, Type[NexusPlugin]]:
+def discover_plugins() -> dict[str, type[NexusPlugin]]:
     """Load plugins that expose the ``nexus.plugins`` entry-point.
 
     Falls back gracefully if no entry-points are installed.
     """
-    plugins: Dict[str, Type[NexusPlugin]] = {}
+    plugins: dict[str, type[NexusPlugin]] = {}
     try:
         from importlib.metadata import entry_points
         eps = entry_points()

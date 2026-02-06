@@ -4,11 +4,8 @@ Run with:
     locust -f tests/locustfile.py --host http://localhost:8080
 """
 
-import json
-import time
 
 from locust import HttpUser, between, task
-from locust.contrib.fasthttp import FastHttpUser
 
 
 class NexusAPIUser(HttpUser):

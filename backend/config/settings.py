@@ -5,6 +5,7 @@ The Settings object is instantiated once at startup and injected wherever needed
 from __future__ import annotations
 
 from pathlib import Path
+
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 

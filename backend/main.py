@@ -1,10 +1,10 @@
 """Nexus v2 -- Personal AI Agent. Entrypoint."""
 
 import os
-import uvicorn
-from dotenv import load_dotenv
 
+import uvicorn
 from app import create_app
+from dotenv import load_dotenv
 
 app = create_app()
 

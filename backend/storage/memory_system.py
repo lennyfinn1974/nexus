@@ -8,21 +8,20 @@ Dataclasses are preserved for in-memory cache representation.
 """
 
 import logging
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from typing import Optional
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from dataclasses import dataclass, asdict
-
 from storage.models import (
-    UserPreferenceModel,
-    ProjectContextModel,
     InteractionPatternModel,
-    SessionContextModel,
     KnowledgeAssociation,
+    ProjectContextModel,
+    SessionContextModel,
     UserGoal,
+    UserPreferenceModel,
 )
 
 logger = logging.getLogger("nexus.memory")
@@ -45,8 +44,8 @@ class ProjectContext:
     description: str
     status: str = "active"  # active, paused, completed, archived
     priority: int = 3  # 1-5 scale
-    tags: List[str] = None
-    files_involved: List[str] = None
+    tags: list[str] = None
+    files_involved: list[str] = None
     last_worked: str = None
     total_sessions: int = 0
 
@@ -55,7 +54,7 @@ class ProjectContext:
 class InteractionPattern:
     pattern_id: str
     description: str
-    triggers: List[str]
+    triggers: list[str]
     success_rate: float
     frequency: int
     last_seen: str
@@ -67,9 +66,9 @@ class PersonalMemorySystem:
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
         self._session_factory = session_factory
-        self._preferences_cache: Dict[str, UserPreference] = {}
-        self._patterns_cache: Dict[str, dict] = {}
-        self._active_projects: Dict[str, ProjectContext] = {}
+        self._preferences_cache: dict[str, UserPreference] = {}
+        self._patterns_cache: dict[str, dict] = {}
+        self._active_projects: dict[str, ProjectContext] = {}
 
     async def initialize(self):
         """Load caches from database. Tables are created by Alembic."""
@@ -186,7 +185,7 @@ class PersonalMemorySystem:
             return self._preferences_cache[key].value
         return default
 
-    async def get_preferences_by_category(self, category: str) -> Dict[str, str]:
+    async def get_preferences_by_category(self, category: str) -> dict[str, str]:
         """Get all preferences in a category."""
         return {
             k: v.value for k, v in self._preferences_cache.items()
@@ -195,7 +194,7 @@ class PersonalMemorySystem:
 
     # ── Project Context ─────────────────────────────────────────
 
-    async def create_project(self, name: str, description: str = "", tags: List[str] = None,
+    async def create_project(self, name: str, description: str = "", tags: list[str] = None,
                            priority: int = 3) -> str:
         """Create a new project context."""
         project_id = f"proj_{hash(name + description) % 100000:05d}"
@@ -230,7 +229,7 @@ class PersonalMemorySystem:
         logger.info(f"Created project: {name} ({project_id})")
         return project_id
 
-    async def get_active_projects(self) -> List[dict]:
+    async def get_active_projects(self) -> list[dict]:
         """Get all active projects."""
         return [asdict(p) for p in self._active_projects.values()]
 
@@ -257,7 +256,7 @@ class PersonalMemorySystem:
 
     # ── Interaction Patterns ────────────────────────────────────
 
-    async def record_pattern(self, pattern_id: str, description: str, triggers: List[str],
+    async def record_pattern(self, pattern_id: str, description: str, triggers: list[str],
                            context_type: str, success: bool = True):
         """Record or reinforce an interaction pattern."""
         now = datetime.now(timezone.utc)
@@ -364,8 +363,8 @@ class PersonalMemorySystem:
 
     async def create_goal(self, goal_id: str, title: str, description: str = "",
                          goal_type: str = "general", target_date: datetime = None,
-                         milestones: List[dict] = None, success_criteria: List[str] = None,
-                         related_projects: List[str] = None) -> str:
+                         milestones: list[dict] = None, success_criteria: list[str] = None,
+                         related_projects: list[str] = None) -> str:
         """Create a new user goal."""
         now = datetime.now(timezone.utc)
         async with self._session_factory() as session:
@@ -396,7 +395,7 @@ class PersonalMemorySystem:
             )
             await session.commit()
 
-    async def get_active_goals(self) -> List[dict]:
+    async def get_active_goals(self) -> list[dict]:
         """Get all active goals."""
         async with self._session_factory() as session:
             result = await session.execute(

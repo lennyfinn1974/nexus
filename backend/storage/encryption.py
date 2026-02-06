@@ -4,8 +4,9 @@ Uses Fernet symmetric encryption. Key is auto-generated on first
 boot and stored in .nexus_secret alongside the project root.
 """
 
-import os
 import logging
+import os
+
 from cryptography.fernet import Fernet
 
 logger = logging.getLogger("nexus.encryption")

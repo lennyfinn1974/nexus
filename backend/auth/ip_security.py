@@ -4,7 +4,8 @@ import logging
 import time
 from datetime import datetime, timezone
 
-from sqlalchemy import select, delete as sa_delete
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = logging.getLogger("nexus.auth.ip")
