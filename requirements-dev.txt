@@ -12,7 +12,7 @@ websockets==13.1
 
 # Linting & formatting
 black==24.10.0
-ruff==0.8.0
+ruff==0.15.0
 mypy==1.13.0
 
 # Security scanning
