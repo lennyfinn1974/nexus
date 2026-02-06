@@ -69,11 +69,13 @@ class ClaudeClient:
                 if block.type == "text":
                     content += block.text
                 elif block.type == "tool_use":
-                    tool_calls.append({
-                        "id": block.id,
-                        "name": block.name,
-                        "input": block.input,
-                    })
+                    tool_calls.append(
+                        {
+                            "id": block.id,
+                            "name": block.name,
+                            "input": block.input,
+                        }
+                    )
 
             result = {
                 "content": content,
@@ -127,10 +129,10 @@ class ClaudeClient:
                     tool_input_json = ""
 
                     async for event in stream:
-                        if hasattr(event, 'type'):
-                            if event.type == 'content_block_start':
+                        if hasattr(event, "type"):
+                            if event.type == "content_block_start":
                                 block = event.content_block
-                                if block.type == 'tool_use':
+                                if block.type == "tool_use":
                                     current_tool = {
                                         "id": block.id,
                                         "name": block.name,
@@ -138,16 +140,17 @@ class ClaudeClient:
                                     }
                                     tool_input_json = ""
 
-                            elif event.type == 'content_block_delta':
+                            elif event.type == "content_block_delta":
                                 delta = event.delta
-                                if delta.type == 'text_delta':
+                                if delta.type == "text_delta":
                                     yield delta.text
-                                elif delta.type == 'input_json_delta':
+                                elif delta.type == "input_json_delta":
                                     tool_input_json += delta.partial_json
 
-                            elif event.type == 'content_block_stop':
+                            elif event.type == "content_block_stop":
                                 if current_tool:
                                     import json
+
                                     try:
                                         current_tool["input"] = json.loads(tool_input_json) if tool_input_json else {}
                                     except json.JSONDecodeError:

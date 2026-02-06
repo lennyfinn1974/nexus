@@ -4,7 +4,6 @@ Run with:
     locust -f tests/locustfile.py --host http://localhost:8080
 """
 
-
 from locust import HttpUser, between, task
 
 
@@ -71,6 +70,7 @@ class NexusAdminUser(HttpUser):
     def on_start(self):
         """Set up admin auth headers."""
         import os
+
         self.admin_key = os.getenv("ADMIN_API_KEY", "change-me-to-a-random-secret")
         self.admin_headers = {"Authorization": f"Bearer {self.admin_key}"}
 

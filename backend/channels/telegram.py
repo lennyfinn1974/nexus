@@ -73,7 +73,7 @@ class TelegramChannel:
             response = await self.message_handler(user_id, text)
             # Telegram has a 4096 char limit
             if len(response) > 4000:
-                chunks = [response[i:i + 4000] for i in range(0, len(response), 4000)]
+                chunks = [response[i : i + 4000] for i in range(0, len(response), 4000)]
                 for chunk in chunks:
                     await update.message.reply_text(chunk)
             else:

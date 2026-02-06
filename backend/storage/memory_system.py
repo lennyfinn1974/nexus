@@ -159,22 +159,26 @@ class PersonalMemorySystem:
             self._preferences_cache[key] = pref
 
         async with self._session_factory() as session:
-            stmt = pg_insert(UserPreferenceModel).values(
-                key=key,
-                value=value,
-                category=category,
-                confidence=confidence,
-                frequency=pref.frequency,
-                first_learned=now,
-                last_updated=now,
-            ).on_conflict_do_update(
-                index_elements=["key"],
-                set_={
-                    "value": value,
-                    "confidence": confidence,
-                    "frequency": pref.frequency,
-                    "last_updated": now,
-                },
+            stmt = (
+                pg_insert(UserPreferenceModel)
+                .values(
+                    key=key,
+                    value=value,
+                    category=category,
+                    confidence=confidence,
+                    frequency=pref.frequency,
+                    first_learned=now,
+                    last_updated=now,
+                )
+                .on_conflict_do_update(
+                    index_elements=["key"],
+                    set_={
+                        "value": value,
+                        "confidence": confidence,
+                        "frequency": pref.frequency,
+                        "last_updated": now,
+                    },
+                )
             )
             await session.execute(stmt)
             await session.commit()
@@ -187,15 +191,11 @@ class PersonalMemorySystem:
 
     async def get_preferences_by_category(self, category: str) -> dict[str, str]:
         """Get all preferences in a category."""
-        return {
-            k: v.value for k, v in self._preferences_cache.items()
-            if v.category == category
-        }
+        return {k: v.value for k, v in self._preferences_cache.items() if v.category == category}
 
     # ── Project Context ─────────────────────────────────────────
 
-    async def create_project(self, name: str, description: str = "", tags: list[str] = None,
-                           priority: int = 3) -> str:
+    async def create_project(self, name: str, description: str = "", tags: list[str] = None, priority: int = 3) -> str:
         """Create a new project context."""
         project_id = f"proj_{hash(name + description) % 100000:05d}"
         now = datetime.now(timezone.utc)
@@ -212,17 +212,19 @@ class PersonalMemorySystem:
         )
 
         async with self._session_factory() as session:
-            session.add(ProjectContextModel(
-                project_id=project_id,
-                name=name,
-                description=description,
-                priority=priority,
-                tags=tags or [],
-                files_involved=[],
-                created_at=now,
-                last_worked=now,
-                total_sessions=0,
-            ))
+            session.add(
+                ProjectContextModel(
+                    project_id=project_id,
+                    name=name,
+                    description=description,
+                    priority=priority,
+                    tags=tags or [],
+                    files_involved=[],
+                    created_at=now,
+                    last_worked=now,
+                    total_sessions=0,
+                )
+            )
             await session.commit()
 
         self._active_projects[project_id] = project
@@ -241,9 +243,7 @@ class PersonalMemorySystem:
 
         async with self._session_factory() as session:
             await session.execute(
-                update(ProjectContextModel)
-                .where(ProjectContextModel.project_id == project_id)
-                .values(**values)
+                update(ProjectContextModel).where(ProjectContextModel.project_id == project_id).values(**values)
             )
             await session.commit()
 
@@ -256,8 +256,9 @@ class PersonalMemorySystem:
 
     # ── Interaction Patterns ────────────────────────────────────
 
-    async def record_pattern(self, pattern_id: str, description: str, triggers: list[str],
-                           context_type: str, success: bool = True):
+    async def record_pattern(
+        self, pattern_id: str, description: str, triggers: list[str], context_type: str, success: bool = True
+    ):
         """Record or reinforce an interaction pattern."""
         now = datetime.now(timezone.utc)
 
@@ -270,9 +271,7 @@ class PersonalMemorySystem:
                         existing.success_rate * (existing.frequency - 1) + 1.0
                     ) / existing.frequency
                 else:
-                    existing.success_rate = (
-                        existing.success_rate * (existing.frequency - 1)
-                    ) / existing.frequency
+                    existing.success_rate = (existing.success_rate * (existing.frequency - 1)) / existing.frequency
                 existing.last_seen = now
                 await session.commit()
 
@@ -287,16 +286,18 @@ class PersonalMemorySystem:
                     "last_seen": now.isoformat(),
                 }
             else:
-                session.add(InteractionPatternModel(
-                    pattern_id=pattern_id,
-                    description=description,
-                    triggers=triggers,
-                    success_rate=1.0 if success else 0.0,
-                    frequency=1,
-                    context_type=context_type,
-                    first_seen=now,
-                    last_seen=now,
-                ))
+                session.add(
+                    InteractionPatternModel(
+                        pattern_id=pattern_id,
+                        description=description,
+                        triggers=triggers,
+                        success_rate=1.0 if success else 0.0,
+                        frequency=1,
+                        context_type=context_type,
+                        first_seen=now,
+                        last_seen=now,
+                    )
+                )
                 await session.commit()
 
     # ── Session Tracking ────────────────────────────────────────
@@ -322,17 +323,12 @@ class PersonalMemorySystem:
         values["end_time"] = now
 
         async with self._session_factory() as session:
-            await session.execute(
-                update(SessionContextModel)
-                .where(SessionContextModel.id == row_id)
-                .values(**values)
-            )
+            await session.execute(update(SessionContextModel).where(SessionContextModel.id == row_id).values(**values))
             await session.commit()
 
     # ── Knowledge Associations ──────────────────────────────────
 
-    async def associate_concepts(self, from_concept: str, to_concept: str,
-                                relationship_type: str, source: str):
+    async def associate_concepts(self, from_concept: str, to_concept: str, relationship_type: str, source: str):
         """Create or reinforce a knowledge association."""
         now = datetime.now(timezone.utc)
         async with self._session_factory() as session:
@@ -349,37 +345,48 @@ class PersonalMemorySystem:
                 existing.reinforced_count += 1
                 existing.strength = min(1.0, existing.strength + 0.1)
             else:
-                session.add(KnowledgeAssociation(
-                    from_concept=from_concept,
-                    to_concept=to_concept,
-                    relationship_type=relationship_type,
-                    strength=0.5,
-                    created_from=source,
-                    created_at=now,
-                ))
+                session.add(
+                    KnowledgeAssociation(
+                        from_concept=from_concept,
+                        to_concept=to_concept,
+                        relationship_type=relationship_type,
+                        strength=0.5,
+                        created_from=source,
+                        created_at=now,
+                    )
+                )
             await session.commit()
 
     # ── User Goals ──────────────────────────────────────────────
 
-    async def create_goal(self, goal_id: str, title: str, description: str = "",
-                         goal_type: str = "general", target_date: datetime = None,
-                         milestones: list[dict] = None, success_criteria: list[str] = None,
-                         related_projects: list[str] = None) -> str:
+    async def create_goal(
+        self,
+        goal_id: str,
+        title: str,
+        description: str = "",
+        goal_type: str = "general",
+        target_date: datetime = None,
+        milestones: list[dict] = None,
+        success_criteria: list[str] = None,
+        related_projects: list[str] = None,
+    ) -> str:
         """Create a new user goal."""
         now = datetime.now(timezone.utc)
         async with self._session_factory() as session:
-            session.add(UserGoal(
-                goal_id=goal_id,
-                title=title,
-                description=description,
-                goal_type=goal_type,
-                target_date=target_date,
-                milestones=milestones or [],
-                success_criteria=success_criteria or [],
-                related_projects=related_projects or [],
-                created_at=now,
-                last_updated=now,
-            ))
+            session.add(
+                UserGoal(
+                    goal_id=goal_id,
+                    title=title,
+                    description=description,
+                    goal_type=goal_type,
+                    target_date=target_date,
+                    milestones=milestones or [],
+                    success_criteria=success_criteria or [],
+                    related_projects=related_projects or [],
+                    created_at=now,
+                    last_updated=now,
+                )
+            )
             await session.commit()
         return goal_id
 
@@ -390,18 +397,14 @@ class PersonalMemorySystem:
         if status:
             values["status"] = status
         async with self._session_factory() as session:
-            await session.execute(
-                update(UserGoal).where(UserGoal.goal_id == goal_id).values(**values)
-            )
+            await session.execute(update(UserGoal).where(UserGoal.goal_id == goal_id).values(**values))
             await session.commit()
 
     async def get_active_goals(self) -> list[dict]:
         """Get all active goals."""
         async with self._session_factory() as session:
             result = await session.execute(
-                select(UserGoal)
-                .where(UserGoal.status == "active")
-                .order_by(UserGoal.target_date.asc().nullslast())
+                select(UserGoal).where(UserGoal.status == "active").order_by(UserGoal.target_date.asc().nullslast())
             )
             goals = result.scalars().all()
             return [
@@ -441,10 +444,7 @@ class PersonalMemorySystem:
 
         # Key preferences
         if self._preferences_cache:
-            high_conf = [
-                p for p in self._preferences_cache.values()
-                if p.confidence >= 0.7
-            ]
+            high_conf = [p for p in self._preferences_cache.values() if p.confidence >= 0.7]
             if high_conf:
                 parts.append("User Preferences:")
                 for p in sorted(high_conf, key=lambda x: x.frequency, reverse=True)[:10]:

@@ -31,10 +31,12 @@ class TestConfigManagerBasics:
         assert test_config.get_bool("TEST_BOOL") is False
 
     async def test_set_many(self, test_config):
-        changed = await test_config.set_many({
-            "AGENT_NAME": "BatchBot",
-            "HOST": "0.0.0.0",
-        })
+        changed = await test_config.set_many(
+            {
+                "AGENT_NAME": "BatchBot",
+                "HOST": "0.0.0.0",
+            }
+        )
         assert "AGENT_NAME" in changed
         assert test_config.agent_name == "BatchBot"
         assert test_config.host == "0.0.0.0"

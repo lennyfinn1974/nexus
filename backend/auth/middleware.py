@@ -1,4 +1,5 @@
 """Auth enforcement middleware — HTTP + WebSocket."""
+
 from __future__ import annotations
 
 import logging
@@ -13,9 +14,7 @@ PUBLIC_PATHS = {
     "/api/health",
     "/healthz",
 }
-PUBLIC_PREFIXES = (
-    "/api/auth/",
-)
+PUBLIC_PREFIXES = ("/api/auth/",)
 
 
 class AuthMiddleware:

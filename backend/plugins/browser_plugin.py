@@ -4,6 +4,7 @@ from .base import BasePlugin
 
 logger = logging.getLogger("nexus.plugins.browser")
 
+
 class BrowserPlugin(BasePlugin):
     name = "browser"
     version = "1.2.0"

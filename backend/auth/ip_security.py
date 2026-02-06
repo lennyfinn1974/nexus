@@ -14,8 +14,9 @@ logger = logging.getLogger("nexus.auth.ip")
 class IPSecurity:
     """Permanent IP blocks (DB) + temporary lockouts (in-memory) for brute-force protection."""
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession],
-                 max_attempts: int = 5, lockout_window: int = 300):
+    def __init__(
+        self, session_factory: async_sessionmaker[AsyncSession], max_attempts: int = 5, lockout_window: int = 300
+    ):
         self._sf = session_factory
         self._max_attempts = max_attempts
         self._lockout_window = lockout_window  # seconds
@@ -79,8 +80,13 @@ class IPSecurity:
 
         async with self._sf() as session:
             result = await session.execute(select(BlockedIP).order_by(BlockedIP.blocked_at.desc()))
-            return [{
-                "id": r.id, "ip_address": r.ip_address, "reason": r.reason,
-                "blocked_by": r.blocked_by,
-                "blocked_at": r.blocked_at.isoformat() if r.blocked_at else None,
-            } for r in result.scalars().all()]
+            return [
+                {
+                    "id": r.id,
+                    "ip_address": r.ip_address,
+                    "reason": r.reason,
+                    "blocked_by": r.blocked_by,
+                    "blocked_at": r.blocked_at.isoformat() if r.blocked_at else None,
+                }
+                for r in result.scalars().all()
+            ]

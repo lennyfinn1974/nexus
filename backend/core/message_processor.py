@@ -17,9 +17,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("nexus.processor")
 
 # Regex for legacy skill action extraction
-SKILL_ACTION_PATTERN = re.compile(
-    r'<skill_action>(\w+)\((.*?)\)</skill_action>', re.DOTALL
-)
+SKILL_ACTION_PATTERN = re.compile(r"<skill_action>(\w+)\((.*?)\)</skill_action>", re.DOTALL)
 
 
 async def process_skill_actions(ai_response: str, skills_engine: Any) -> list[dict]:
@@ -31,7 +29,7 @@ async def process_skill_actions(ai_response: str, skills_engine: Any) -> list[di
     results = []
     for action_name, params_str in matches:
         params: dict[str, str] = {}
-        for part in re.split(r',\s*(?=\w+=)', params_str):
+        for part in re.split(r",\s*(?=\w+=)", params_str):
             part = part.strip()
             if "=" in part:
                 k, v = part.split("=", 1)
@@ -161,7 +159,7 @@ async def process_message(
         system += f"\n\n{skill_context}"
 
     # Conversation tracking
-    if not hasattr(process_message, '_tg_convs'):
+    if not hasattr(process_message, "_tg_convs"):
         process_message._tg_convs = {}
     conv_id = process_message._tg_convs.get(user_id)
     if conv_id:
@@ -183,11 +181,15 @@ async def process_message(
     cleaned_content, tool_results = await plugin_manager.process_tool_calls(result["content"])
     if tool_results:
         tool_feedback = "\n".join(
-            f"Tool {tr['tool']}: {tr.get('result', tr.get('error', 'unknown'))}"
-            for tr in tool_results
+            f"Tool {tr['tool']}: {tr.get('result', tr.get('error', 'unknown'))}" for tr in tool_results
         )
         messages.append({"role": "assistant", "content": result["content"]})
-        messages.append({"role": "user", "content": f"[Tool results]\n{tool_feedback}\n\nPlease incorporate these results into your response."})
+        messages.append(
+            {
+                "role": "user",
+                "content": f"[Tool results]\n{tool_feedback}\n\nPlease incorporate these results into your response.",
+            }
+        )
         final_result = await model_router.chat(messages, system=system, force_model=force_model)
         result["content"] = final_result["content"]
     elif cleaned_content != result["content"]:
@@ -195,7 +197,9 @@ async def process_message(
 
     await db.add_message(conv_id, "user", text)
     await db.add_message(
-        conv_id, "assistant", result["content"],
+        conv_id,
+        "assistant",
+        result["content"],
         model_used=result.get("model", "unknown"),
         tokens_in=result.get("tokens_in", 0),
         tokens_out=result.get("tokens_out", 0),
@@ -212,7 +216,7 @@ async def get_status(
     """Return a formatted status string."""
     status = model_router.status
     pc = len(plugin_manager.plugins)
-    pt = len(plugin_manager.all_tools) if hasattr(plugin_manager, 'all_tools') else 0
+    pt = len(plugin_manager.all_tools) if hasattr(plugin_manager, "all_tools") else 0
     return (
         f"Ollama: {'OK' if status['ollama_available'] else 'OFF'} ({status['ollama_model']})\n"
         f"Claude: {'OK' if status['claude_available'] else 'OFF'} ({status['claude_model']})\n"

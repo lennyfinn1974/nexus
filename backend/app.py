@@ -62,9 +62,11 @@ logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _file_handle
 
 # ── Application State ──
 
+
 @dataclass
 class AppState:
     """Holds all runtime state for the Nexus application."""
+
     cfg: ConfigManager = None
     db: Database = None
     skills_engine: SkillsEngine = None
@@ -84,6 +86,7 @@ class AppState:
 
 
 # ── Task Handlers ──
+
 
 async def _handle_research_task(payload: dict, state: AppState) -> str:
     topic = payload.get("topic", "")
@@ -124,13 +127,11 @@ async def _handle_ingest_task(payload: dict, state: AppState) -> str:
 
 # ── Model Reconnection ──
 
+
 async def _on_model_settings_changed(key, old_value, new_value, state: AppState):
     logger.info(f"Model setting changed: {key} -- reconnecting models")
     ollama = OllamaClient(state.cfg.ollama_base_url, state.cfg.ollama_model)
-    claude = (
-        ClaudeClient(state.cfg.anthropic_api_key, state.cfg.claude_model)
-        if state.cfg.has_anthropic else None
-    )
+    claude = ClaudeClient(state.cfg.anthropic_api_key, state.cfg.claude_model) if state.cfg.has_anthropic else None
     state.model_router = ModelRouter(ollama, claude, state.cfg.complexity_threshold)
     await state.model_router.check_availability()
     if state.plugin_manager:
@@ -138,6 +139,7 @@ async def _on_model_settings_changed(key, old_value, new_value, state: AppState)
 
 
 # ── Lifespan ──
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -172,9 +174,7 @@ async def lifespan(app: FastAPI):
     # Subscribe model reconnection
     state.cfg.subscribe(
         MODEL_KEYS,
-        lambda k, old, new: asyncio.ensure_future(
-            _on_model_settings_changed(k, old, new, state)
-        ),
+        lambda k, old, new: asyncio.ensure_future(_on_model_settings_changed(k, old, new, state)),
     )
 
     # Ensure directories
@@ -200,10 +200,7 @@ async def lifespan(app: FastAPI):
 
     # Model clients
     ollama = OllamaClient(state.cfg.ollama_base_url, state.cfg.ollama_model)
-    claude = (
-        ClaudeClient(state.cfg.anthropic_api_key, state.cfg.claude_model)
-        if state.cfg.has_anthropic else None
-    )
+    claude = ClaudeClient(state.cfg.anthropic_api_key, state.cfg.claude_model) if state.cfg.has_anthropic else None
     state.model_router = ModelRouter(ollama, claude, state.cfg.complexity_threshold)
     await state.model_router.check_availability()
 
@@ -213,12 +210,8 @@ async def lifespan(app: FastAPI):
 
     # Task queue
     state.task_queue = TaskQueue(state.db, state.cfg.max_research_tasks)
-    state.task_queue.register_handler(
-        "research", lambda p: _handle_research_task(p, state)
-    )
-    state.task_queue.register_handler(
-        "ingest", lambda p: _handle_ingest_task(p, state)
-    )
+    state.task_queue.register_handler("research", lambda p: _handle_research_task(p, state))
+    state.task_queue.register_handler("ingest", lambda p: _handle_ingest_task(p, state))
 
     # Plugins
     state.plugin_manager = PluginManager(state.cfg, state.db, state.model_router)
@@ -227,6 +220,7 @@ async def lifespan(app: FastAPI):
     # Tool executor (Phase 6)
     try:
         from core.tool_executor import ToolExecutor
+
         state.tool_executor = ToolExecutor(state.plugin_manager, state.skills_engine)
     except ImportError:
         state.tool_executor = None
@@ -234,6 +228,7 @@ async def lifespan(app: FastAPI):
     # Partner registry (Phase 7)
     try:
         from core.partnerships import PartnerRegistry
+
         state.partner_registry = PartnerRegistry(state.cfg)
     except ImportError:
         state.partner_registry = None
@@ -244,11 +239,18 @@ async def lifespan(app: FastAPI):
 
     # Admin API
     from admin import init as admin_init
+
     admin_init(
-        state.cfg, state.plugin_manager, state.model_router, state.db,
-        state.task_queue, state.skills_engine,
-        jwt_manager=state.jwt_manager, user_manager=state.user_manager,
-        ip_security=state.ip_security, audit_log=state.audit_log,
+        state.cfg,
+        state.plugin_manager,
+        state.model_router,
+        state.db,
+        state.task_queue,
+        state.skills_engine,
+        jwt_manager=state.jwt_manager,
+        user_manager=state.user_manager,
+        ip_security=state.ip_security,
+        audit_log=state.audit_log,
     )
 
     # Telegram (optional)
@@ -259,8 +261,10 @@ async def lifespan(app: FastAPI):
 
             async def tg_handler(user_id: str, text: str) -> str:
                 return await process_message(
-                    user_id, text,
-                    cfg=state.cfg, db=state.db,
+                    user_id,
+                    text,
+                    cfg=state.cfg,
+                    db=state.db,
                     skills_engine=state.skills_engine,
                     model_router=state.model_router,
                     task_queue=state.task_queue,
@@ -268,12 +272,16 @@ async def lifespan(app: FastAPI):
                 )
 
             state.telegram_channel = TelegramChannel(
-                state.cfg.telegram_bot_token, state.cfg.telegram_allowed_users, tg_handler,
+                state.cfg.telegram_bot_token,
+                state.cfg.telegram_allowed_users,
+                tg_handler,
             )
             await state.telegram_channel.start(
                 status_fn=lambda: get_status(
-                    state.model_router, state.plugin_manager,
-                    state.task_queue, state.skills_engine,
+                    state.model_router,
+                    state.plugin_manager,
+                    state.task_queue,
+                    state.skills_engine,
                 )
             )
             logger.info("Telegram bot started")
@@ -296,6 +304,7 @@ async def lifespan(app: FastAPI):
 
 
 # ── App Factory ──
+
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""

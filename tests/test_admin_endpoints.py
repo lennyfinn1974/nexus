@@ -1,7 +1,6 @@
 """Tests for admin API data endpoints (with valid auth)."""
 
 
-
 class TestAdminDataEndpoints:
     """Verify admin endpoints return correct data when authenticated."""
 

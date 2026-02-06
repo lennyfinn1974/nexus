@@ -154,8 +154,7 @@ class ModelRouter:
             return await _try(client, model_name)
         except Exception as e:
             fallback = "claude" if model_name == "ollama" else "ollama"
-            if (fallback == "claude" and self._claude_available) or \
-               (fallback == "ollama" and self._ollama_available):
+            if (fallback == "claude" and self._claude_available) or (fallback == "ollama" and self._ollama_available):
                 logger.warning(f"Trying fallback to {fallback}...")
                 fb_client = self._get_client(fallback)
                 try:
@@ -164,10 +163,7 @@ class ModelRouter:
                     result["fallback_reason"] = str(e)
                     return result
                 except Exception as fb_e:
-                    raise Exception(
-                        f"Primary {model_name} failed ({e}), "
-                        f"fallback {fallback} also failed ({fb_e})"
-                    )
+                    raise Exception(f"Primary {model_name} failed ({e}), " f"fallback {fallback} also failed ({fb_e})")
             else:
                 raise
 

@@ -1,4 +1,5 @@
 """User management — CRUD, whitelist, role management."""
+
 from __future__ import annotations
 
 import logging
@@ -40,10 +41,15 @@ class UserManager:
                     user_obj.picture = picture
                 await session.commit()
                 return {
-                    "id": user_obj.id, "email": user_obj.email, "name": user_obj.name,
-                    "picture": user_obj.picture, "role": user_obj.role, "active": user_obj.active,
+                    "id": user_obj.id,
+                    "email": user_obj.email,
+                    "name": user_obj.name,
+                    "picture": user_obj.picture,
+                    "role": user_obj.role,
+                    "active": user_obj.active,
                     "created_at": user_obj.created_at.isoformat() if user_obj.created_at else None,
-                    "last_login": now.isoformat(), "last_ip": ip,
+                    "last_login": now.isoformat(),
+                    "last_ip": ip,
                 }
 
             # New user — check if first user (auto-admin)
@@ -55,8 +61,15 @@ class UserManager:
             role = "admin" if is_first else "user"
 
             user_obj = User(
-                id=user_id, email=email, name=name, picture=picture,
-                role=role, active=True, created_at=now, last_login=now, last_ip=ip,
+                id=user_id,
+                email=email,
+                name=name,
+                picture=picture,
+                role=role,
+                active=True,
+                created_at=now,
+                last_login=now,
+                last_ip=ip,
             )
             session.add(user_obj)
             await session.commit()
@@ -65,9 +78,15 @@ class UserManager:
                 logger.info(f"First user {email} auto-promoted to admin")
 
             return {
-                "id": user_id, "email": email, "name": name, "picture": picture,
-                "role": role, "active": True, "created_at": now.isoformat(),
-                "last_login": now.isoformat(), "last_ip": ip,
+                "id": user_id,
+                "email": email,
+                "name": name,
+                "picture": picture,
+                "role": role,
+                "active": True,
+                "created_at": now.isoformat(),
+                "last_login": now.isoformat(),
+                "last_ip": ip,
             }
 
     async def get_user(self, user_id: str) -> dict | None:
@@ -123,16 +142,18 @@ class UserManager:
 
         now = datetime.now(timezone.utc)
         async with self._sf() as session:
-            await session.execute(
-                update(User).where(User.id == user_id).values(last_login=now, last_ip=ip)
-            )
+            await session.execute(update(User).where(User.id == user_id).values(last_login=now, last_ip=ip))
             await session.commit()
 
     @staticmethod
     def _to_dict(user_obj) -> dict:
         return {
-            "id": user_obj.id, "email": user_obj.email, "name": user_obj.name,
-            "picture": user_obj.picture, "role": user_obj.role, "active": user_obj.active,
+            "id": user_obj.id,
+            "email": user_obj.email,
+            "name": user_obj.name,
+            "picture": user_obj.picture,
+            "role": user_obj.role,
+            "active": user_obj.active,
             "created_at": user_obj.created_at.isoformat() if user_obj.created_at else None,
             "last_login": user_obj.last_login.isoformat() if user_obj.last_login else None,
             "last_ip": user_obj.last_ip,
@@ -174,7 +195,12 @@ class UserManager:
 
         async with self._sf() as session:
             result = await session.execute(select(Whitelist).order_by(Whitelist.added_at.desc()))
-            return [{
-                "id": r.id, "email": r.email, "added_by": r.added_by,
-                "added_at": r.added_at.isoformat() if r.added_at else None,
-            } for r in result.scalars().all()]
+            return [
+                {
+                    "id": r.id,
+                    "email": r.email,
+                    "added_by": r.added_by,
+                    "added_at": r.added_at.isoformat() if r.added_at else None,
+                }
+                for r in result.scalars().all()
+            ]

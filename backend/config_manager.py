@@ -25,41 +25,235 @@ logger = logging.getLogger("nexus.config")
 # key, default, encrypted?, category, label, field_type, description, extra
 SETTINGS_SCHEMA: list[dict] = [
     # Models
-    {"key": "ANTHROPIC_API_KEY",   "default": "",  "encrypted": True,  "category": "Models",   "label": "Anthropic API Key",        "type": "password",  "description": "Your Claude API key from console.anthropic.com"},
-    {"key": "CLAUDE_MODEL",        "default": "claude-sonnet-4-20250514", "encrypted": False, "category": "Models", "label": "Claude Model", "type": "select",
-     "description": "Which Claude model to use", "options": ["claude-sonnet-4-20250514", "claude-haiku-4-20250414", "claude-opus-4-20250514"]},
-    {"key": "OLLAMA_BASE_URL",     "default": "http://localhost:11434",  "encrypted": False, "category": "Models", "label": "Ollama URL",    "type": "text", "description": "Ollama server address"},
-    {"key": "OLLAMA_MODEL",        "default": "kimi-k2.5:cloud",         "encrypted": False, "category": "Models", "label": "Ollama Model",  "type": "text", "description": "Local model name (e.g. llama3.1, kimi-k2.5:cloud)"},
+    {
+        "key": "ANTHROPIC_API_KEY",
+        "default": "",
+        "encrypted": True,
+        "category": "Models",
+        "label": "Anthropic API Key",
+        "type": "password",
+        "description": "Your Claude API key from console.anthropic.com",
+    },
+    {
+        "key": "CLAUDE_MODEL",
+        "default": "claude-sonnet-4-20250514",
+        "encrypted": False,
+        "category": "Models",
+        "label": "Claude Model",
+        "type": "select",
+        "description": "Which Claude model to use",
+        "options": ["claude-sonnet-4-20250514", "claude-haiku-4-20250414", "claude-opus-4-20250514"],
+    },
+    {
+        "key": "OLLAMA_BASE_URL",
+        "default": "http://localhost:11434",
+        "encrypted": False,
+        "category": "Models",
+        "label": "Ollama URL",
+        "type": "text",
+        "description": "Ollama server address",
+    },
+    {
+        "key": "OLLAMA_MODEL",
+        "default": "kimi-k2.5:cloud",
+        "encrypted": False,
+        "category": "Models",
+        "label": "Ollama Model",
+        "type": "text",
+        "description": "Local model name (e.g. llama3.1, kimi-k2.5:cloud)",
+    },
     # Routing
-    {"key": "COMPLEXITY_THRESHOLD","default": "60", "encrypted": False, "category": "Routing", "label": "Complexity Threshold",  "type": "range", "description": "0 = always Claude, 100 = always local. Score above this → Claude.", "min": 0, "max": 100},
+    {
+        "key": "COMPLEXITY_THRESHOLD",
+        "default": "60",
+        "encrypted": False,
+        "category": "Routing",
+        "label": "Complexity Threshold",
+        "type": "range",
+        "description": "0 = always Claude, 100 = always local. Score above this → Claude.",
+        "min": 0,
+        "max": 100,
+    },
     # Files
-    {"key": "DOCS_DIR",            "default": "",   "encrypted": False, "category": "Files",   "label": "Documents Directory",   "type": "text",  "description": "Folder path for document ingestion"},
+    {
+        "key": "DOCS_DIR",
+        "default": "",
+        "encrypted": False,
+        "category": "Files",
+        "label": "Documents Directory",
+        "type": "text",
+        "description": "Folder path for document ingestion",
+    },
     # Tasks
-    {"key": "MAX_RESEARCH_TASKS",  "default": "3",  "encrypted": False, "category": "Tasks",   "label": "Max Concurrent Tasks",  "type": "number","description": "Maximum background tasks running at once", "min": 1, "max": 10},
+    {
+        "key": "MAX_RESEARCH_TASKS",
+        "default": "3",
+        "encrypted": False,
+        "category": "Tasks",
+        "label": "Max Concurrent Tasks",
+        "type": "number",
+        "description": "Maximum background tasks running at once",
+        "min": 1,
+        "max": 10,
+    },
     # Plugins
-    {"key": "GITHUB_TOKEN",        "default": "",   "encrypted": True,  "category": "Plugins", "label": "GitHub Token",          "type": "password", "description": "Personal access token from github.com/settings/tokens"},
-    {"key": "TELEGRAM_BOT_TOKEN",  "default": "",   "encrypted": True,  "category": "Plugins", "label": "Telegram Bot Token",    "type": "password", "description": "Bot token from @BotFather"},
-    {"key": "TELEGRAM_ALLOWED_USERS","default": "", "encrypted": False, "category": "Plugins", "label": "Telegram Allowed Users","type": "text",    "description": "Comma-separated Telegram user IDs"},
+    {
+        "key": "GITHUB_TOKEN",
+        "default": "",
+        "encrypted": True,
+        "category": "Plugins",
+        "label": "GitHub Token",
+        "type": "password",
+        "description": "Personal access token from github.com/settings/tokens",
+    },
+    {
+        "key": "TELEGRAM_BOT_TOKEN",
+        "default": "",
+        "encrypted": True,
+        "category": "Plugins",
+        "label": "Telegram Bot Token",
+        "type": "password",
+        "description": "Bot token from @BotFather",
+    },
+    {
+        "key": "TELEGRAM_ALLOWED_USERS",
+        "default": "",
+        "encrypted": False,
+        "category": "Plugins",
+        "label": "Telegram Allowed Users",
+        "type": "text",
+        "description": "Comma-separated Telegram user IDs",
+    },
     # OpenClaw Bridge
-    {"key": "OPENCLAW_GATEWAY_URL", "default": "",   "encrypted": False, "category": "Partnership", "label": "OpenClaw Gateway URL", "type": "text",     "description": "OpenClaw Gateway API endpoint (e.g., http://localhost:18789)"},
-    {"key": "OPENCLAW_TOKEN",      "default": "",   "encrypted": True,  "category": "Partnership", "label": "OpenClaw Auth Token",  "type": "password", "description": "Authentication token for OpenClaw API access"},
+    {
+        "key": "OPENCLAW_GATEWAY_URL",
+        "default": "",
+        "encrypted": False,
+        "category": "Partnership",
+        "label": "OpenClaw Gateway URL",
+        "type": "text",
+        "description": "OpenClaw Gateway API endpoint (e.g., http://localhost:18789)",
+    },
+    {
+        "key": "OPENCLAW_TOKEN",
+        "default": "",
+        "encrypted": True,
+        "category": "Partnership",
+        "label": "OpenClaw Auth Token",
+        "type": "password",
+        "description": "Authentication token for OpenClaw API access",
+    },
     # Server (bootstrap — also in .env)
-    {"key": "HOST",                "default": "127.0.0.1", "encrypted": False, "category": "Server", "label": "Server Host", "type": "text",  "description": "Bind address (127.0.0.1 = local, 0.0.0.0 = network)"},
-    {"key": "PORT",                "default": "8080",      "encrypted": False, "category": "Server", "label": "Server Port", "type": "number","description": "Port number", "min": 1024, "max": 65535},
+    {
+        "key": "HOST",
+        "default": "127.0.0.1",
+        "encrypted": False,
+        "category": "Server",
+        "label": "Server Host",
+        "type": "text",
+        "description": "Bind address (127.0.0.1 = local, 0.0.0.0 = network)",
+    },
+    {
+        "key": "PORT",
+        "default": "8080",
+        "encrypted": False,
+        "category": "Server",
+        "label": "Server Port",
+        "type": "number",
+        "description": "Port number",
+        "min": 1024,
+        "max": 65535,
+    },
     # Persona
-    {"key": "AGENT_NAME",          "default": "Nexus", "encrypted": False, "category": "Persona", "label": "Agent Name",           "type": "text",     "description": "The name the agent uses to identify itself"},
-    {"key": "CUSTOM_SYSTEM_PROMPT","default": "",      "encrypted": False, "category": "Persona", "label": "Custom Instructions",  "type": "textarea", "description": "Extra instructions appended to the system prompt"},
-    {"key": "PERSONA_TONE",        "default": "balanced","encrypted": False,"category": "Persona", "label": "Response Tone",       "type": "select",   "description": "Overall tone for responses",
-     "options": ["professional", "balanced", "casual", "technical"]},
+    {
+        "key": "AGENT_NAME",
+        "default": "Nexus",
+        "encrypted": False,
+        "category": "Persona",
+        "label": "Agent Name",
+        "type": "text",
+        "description": "The name the agent uses to identify itself",
+    },
+    {
+        "key": "CUSTOM_SYSTEM_PROMPT",
+        "default": "",
+        "encrypted": False,
+        "category": "Persona",
+        "label": "Custom Instructions",
+        "type": "textarea",
+        "description": "Extra instructions appended to the system prompt",
+    },
+    {
+        "key": "PERSONA_TONE",
+        "default": "balanced",
+        "encrypted": False,
+        "category": "Persona",
+        "label": "Response Tone",
+        "type": "select",
+        "description": "Overall tone for responses",
+        "options": ["professional", "balanced", "casual", "technical"],
+    },
     # Authentication
-    {"key": "AUTH_ENABLED",         "default": "false", "encrypted": False, "category": "Authentication", "label": "Enable Auth",          "type": "select",   "description": "Require login to access Nexus (restart required)",
-     "options": ["false", "true"]},
-    {"key": "GOOGLE_CLIENT_ID",    "default": "",      "encrypted": False, "category": "Authentication", "label": "Google Client ID",     "type": "text",     "description": "OAuth 2.0 client ID from Google Cloud Console"},
-    {"key": "GOOGLE_CLIENT_SECRET","default": "",      "encrypted": True,  "category": "Authentication", "label": "Google Client Secret", "type": "password", "description": "OAuth 2.0 client secret from Google Cloud Console"},
-    {"key": "AUTH_WHITELIST_MODE", "default": "open",  "encrypted": False, "category": "Authentication", "label": "Whitelist Mode",       "type": "select",   "description": "Who can sign in: open = anyone with Google, whitelist = pre-approved emails only",
-     "options": ["open", "whitelist"]},
-    {"key": "JWT_ACCESS_TTL",      "default": "1800",  "encrypted": False, "category": "Authentication", "label": "Access Token TTL (s)", "type": "number",   "description": "Access token lifetime in seconds (default 1800 = 30 min)", "min": 300, "max": 86400},
-    {"key": "JWT_REFRESH_TTL",     "default": "604800","encrypted": False, "category": "Authentication", "label": "Refresh Token TTL (s)","type": "number",   "description": "Refresh token lifetime in seconds (default 604800 = 7 days)", "min": 3600, "max": 2592000},
+    {
+        "key": "AUTH_ENABLED",
+        "default": "false",
+        "encrypted": False,
+        "category": "Authentication",
+        "label": "Enable Auth",
+        "type": "select",
+        "description": "Require login to access Nexus (restart required)",
+        "options": ["false", "true"],
+    },
+    {
+        "key": "GOOGLE_CLIENT_ID",
+        "default": "",
+        "encrypted": False,
+        "category": "Authentication",
+        "label": "Google Client ID",
+        "type": "text",
+        "description": "OAuth 2.0 client ID from Google Cloud Console",
+    },
+    {
+        "key": "GOOGLE_CLIENT_SECRET",
+        "default": "",
+        "encrypted": True,
+        "category": "Authentication",
+        "label": "Google Client Secret",
+        "type": "password",
+        "description": "OAuth 2.0 client secret from Google Cloud Console",
+    },
+    {
+        "key": "AUTH_WHITELIST_MODE",
+        "default": "open",
+        "encrypted": False,
+        "category": "Authentication",
+        "label": "Whitelist Mode",
+        "type": "select",
+        "description": "Who can sign in: open = anyone with Google, whitelist = pre-approved emails only",
+        "options": ["open", "whitelist"],
+    },
+    {
+        "key": "JWT_ACCESS_TTL",
+        "default": "1800",
+        "encrypted": False,
+        "category": "Authentication",
+        "label": "Access Token TTL (s)",
+        "type": "number",
+        "description": "Access token lifetime in seconds (default 1800 = 30 min)",
+        "min": 300,
+        "max": 86400,
+    },
+    {
+        "key": "JWT_REFRESH_TTL",
+        "default": "604800",
+        "encrypted": False,
+        "category": "Authentication",
+        "label": "Refresh Token TTL (s)",
+        "type": "number",
+        "description": "Refresh token lifetime in seconds (default 604800 = 7 days)",
+        "min": 3600,
+        "max": 2592000,
+    },
 ]
 
 # Build a fast lookup
@@ -112,6 +306,7 @@ class ConfigManager:
             return 0
 
         from dotenv import dotenv_values
+
         env = dotenv_values(env_path)
 
         imported = 0
@@ -175,34 +370,40 @@ class ConfigManager:
 
         async with self._session_factory() as session:
             # PostgreSQL upsert
-            stmt = pg_insert(Setting).values(
-                key=key,
-                value=store_value,
-                encrypted=is_encrypted,
-                category=category,
-                updated_at=now,
-                updated_by=changed_by,
-            ).on_conflict_do_update(
-                index_elements=["key"],
-                set_={
-                    "value": store_value,
-                    "encrypted": is_encrypted,
-                    "updated_at": now,
-                    "updated_by": changed_by,
-                },
+            stmt = (
+                pg_insert(Setting)
+                .values(
+                    key=key,
+                    value=store_value,
+                    encrypted=is_encrypted,
+                    category=category,
+                    updated_at=now,
+                    updated_by=changed_by,
+                )
+                .on_conflict_do_update(
+                    index_elements=["key"],
+                    set_={
+                        "value": store_value,
+                        "encrypted": is_encrypted,
+                        "updated_at": now,
+                        "updated_by": changed_by,
+                    },
+                )
             )
             await session.execute(stmt)
 
             # Audit (don't log actual secret values)
             audit_old = "***" if is_encrypted else (old_value or "")
             audit_new = "***" if is_encrypted else value
-            session.add(SettingsAudit(
-                key=key,
-                old_value=audit_old,
-                new_value=audit_new,
-                changed_at=now,
-                changed_by=changed_by,
-            ))
+            session.add(
+                SettingsAudit(
+                    key=key,
+                    old_value=audit_old,
+                    new_value=audit_new,
+                    changed_at=now,
+                    changed_by=changed_by,
+                )
+            )
 
             await session.commit()
 
@@ -235,6 +436,7 @@ class ConfigManager:
             if key in keys or "*" in keys:
                 try:
                     import asyncio
+
                     if asyncio.iscoroutinefunction(callback):
                         await callback(key, old, new)
                     else:
@@ -247,11 +449,7 @@ class ConfigManager:
     async def get_audit_log(self, limit: int = 100) -> list[dict]:
         """Return recent settings audit entries."""
         async with self._session_factory() as session:
-            result = await session.execute(
-                select(SettingsAudit)
-                .order_by(SettingsAudit.changed_at.desc())
-                .limit(limit)
-            )
+            result = await session.execute(select(SettingsAudit).order_by(SettingsAudit.changed_at.desc()).limit(limit))
             rows = result.scalars().all()
             return [
                 {
@@ -273,11 +471,13 @@ class ConfigManager:
         for s in SETTINGS_SCHEMA:
             value = self._cache.get(s["key"], s.get("default", ""))
             is_secret = s.get("encrypted", False)
-            results.append({
-                **{k: v for k, v in s.items() if k != "default"},
-                "value": self._mask(value) if is_secret else value,
-                "has_value": bool(value),
-            })
+            results.append(
+                {
+                    **{k: v for k, v in s.items() if k != "default"},
+                    "value": self._mask(value) if is_secret else value,
+                    "has_value": bool(value),
+                }
+            )
         return results
 
     @staticmethod
@@ -293,62 +493,110 @@ class ConfigManager:
     # ── Convenience Properties (match old Config fields) ────────
 
     @property
-    def anthropic_api_key(self):    return self.get("ANTHROPIC_API_KEY")
+    def anthropic_api_key(self):
+        return self.get("ANTHROPIC_API_KEY")
+
     @property
-    def claude_model(self):         return self.get("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+    def claude_model(self):
+        return self.get("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+
     @property
-    def ollama_base_url(self):      return self.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    def ollama_base_url(self):
+        return self.get("OLLAMA_BASE_URL", "http://localhost:11434")
+
     @property
-    def ollama_model(self):         return self.get("OLLAMA_MODEL", "kimi-k2.5:cloud")
+    def ollama_model(self):
+        return self.get("OLLAMA_MODEL", "kimi-k2.5:cloud")
+
     @property
-    def complexity_threshold(self):  return self.get_int("COMPLEXITY_THRESHOLD", 60)
+    def complexity_threshold(self):
+        return self.get_int("COMPLEXITY_THRESHOLD", 60)
+
     @property
-    def github_token(self):         return self.get("GITHUB_TOKEN")
+    def github_token(self):
+        return self.get("GITHUB_TOKEN")
+
     @property
-    def telegram_bot_token(self):   return self.get("TELEGRAM_BOT_TOKEN")
+    def telegram_bot_token(self):
+        return self.get("TELEGRAM_BOT_TOKEN")
+
     @property
     def telegram_allowed_users(self):
         raw = self.get("TELEGRAM_ALLOWED_USERS", "")
         if not raw.strip():
             return []
         return [int(u.strip()) for u in raw.split(",") if u.strip()]
+
     @property
-    def host(self):                 return self.get("HOST", "127.0.0.1")
+    def host(self):
+        return self.get("HOST", "127.0.0.1")
+
     @property
-    def port(self):                 return self.get_int("PORT", 8080)
+    def port(self):
+        return self.get_int("PORT", 8080)
+
     @property
-    def max_research_tasks(self):   return self.get_int("MAX_RESEARCH_TASKS", 3)
+    def max_research_tasks(self):
+        return self.get_int("MAX_RESEARCH_TASKS", 3)
+
     @property
-    def agent_name(self):           return self.get("AGENT_NAME", "Nexus")
+    def agent_name(self):
+        return self.get("AGENT_NAME", "Nexus")
+
     @property
-    def custom_system_prompt(self):  return self.get("CUSTOM_SYSTEM_PROMPT", "")
+    def custom_system_prompt(self):
+        return self.get("CUSTOM_SYSTEM_PROMPT", "")
+
     @property
-    def persona_tone(self):          return self.get("PERSONA_TONE", "balanced")
+    def persona_tone(self):
+        return self.get("PERSONA_TONE", "balanced")
+
     @property
     def docs_dir(self):
         d = self.get("DOCS_DIR")
         return d if d else os.path.join(self.base_dir, "docs_input")
+
     @property
-    def skills_dir(self):            return os.path.join(self.base_dir, "skills")
+    def skills_dir(self):
+        return os.path.join(self.base_dir, "skills")
+
     @property
-    def data_dir(self):              return os.path.join(self.base_dir, "data")
+    def data_dir(self):
+        return os.path.join(self.base_dir, "data")
+
     @property
     def has_anthropic(self):
         key = self.anthropic_api_key
         return bool(key and key != "sk-ant-your-key-here")
+
     @property
-    def has_telegram(self):          return bool(self.telegram_bot_token)
+    def has_telegram(self):
+        return bool(self.telegram_bot_token)
+
     @property
-    def auth_enabled(self):          return self.get_bool("AUTH_ENABLED", False)
+    def auth_enabled(self):
+        return self.get_bool("AUTH_ENABLED", False)
+
     @property
-    def google_client_id(self):      return self.get("GOOGLE_CLIENT_ID")
+    def google_client_id(self):
+        return self.get("GOOGLE_CLIENT_ID")
+
     @property
-    def google_client_secret(self):  return self.get("GOOGLE_CLIENT_SECRET")
+    def google_client_secret(self):
+        return self.get("GOOGLE_CLIENT_SECRET")
+
     @property
-    def auth_whitelist_mode(self):   return self.get("AUTH_WHITELIST_MODE", "open")
+    def auth_whitelist_mode(self):
+        return self.get("AUTH_WHITELIST_MODE", "open")
+
     @property
-    def jwt_access_ttl(self):        return self.get_int("JWT_ACCESS_TTL", 1800)
+    def jwt_access_ttl(self):
+        return self.get_int("JWT_ACCESS_TTL", 1800)
+
     @property
-    def jwt_refresh_ttl(self):       return self.get_int("JWT_REFRESH_TTL", 604800)
+    def jwt_refresh_ttl(self):
+        return self.get_int("JWT_REFRESH_TTL", 604800)
+
     @property
-    def has_oauth(self):             return bool(self.google_client_id and self.google_client_secret)
+    def has_oauth(self):
+        return bool(self.google_client_id and self.google_client_secret)

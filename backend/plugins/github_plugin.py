@@ -4,6 +4,7 @@ from .base import BasePlugin
 
 logger = logging.getLogger("nexus.plugins.github")
 
+
 class GithubPlugin(BasePlugin):
     name = "github"
     version = "0.9.3"

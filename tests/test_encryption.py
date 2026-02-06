@@ -1,7 +1,6 @@
 """Tests for the encryption module."""
 
 
-
 class TestEncryption:
     def test_encrypt_decrypt_roundtrip(self, tmp_base_dir):
         from storage.encryption import decrypt, encrypt, init

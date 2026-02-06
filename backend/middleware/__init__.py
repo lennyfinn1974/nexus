@@ -6,7 +6,8 @@ from .errors import register_exception_handlers
 from .rate_limit import RateLimiter, RateLimitMiddleware
 
 __all__ = [
-    "RateLimiter", "RateLimitMiddleware",
+    "RateLimiter",
+    "RateLimitMiddleware",
     "AuditMiddleware",
     "AuthMiddleware",
     "register_exception_handlers",

@@ -138,7 +138,9 @@ def register_exception_handlers(app: FastAPI) -> None:
         request_id = getattr(request.state, "request_id", None)
         logger.error(
             "Unhandled exception [rid:%s]: %s\n%s",
-            request_id, exc, traceback.format_exc(),
+            request_id,
+            exc,
+            traceback.format_exc(),
         )
         return JSONResponse(
             status_code=500,

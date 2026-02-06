@@ -50,10 +50,12 @@ class PluginManager:
                 plugin_cls = None
                 for attr_name in dir(mod):
                     attr = getattr(mod, attr_name)
-                    if (isinstance(attr, type)
-                            and issubclass(attr, NexusPlugin)
-                            and attr is not NexusPlugin
-                            and attr is not BasePlugin):
+                    if (
+                        isinstance(attr, type)
+                        and issubclass(attr, NexusPlugin)
+                        and attr is not NexusPlugin
+                        and attr is not BasePlugin
+                    ):
                         plugin_cls = attr
                         break
 
@@ -64,8 +66,10 @@ class PluginManager:
                 plugin = plugin_cls(self.config, self.db, self.router)
                 await plugin.init()
                 self.plugins[plugin.name] = plugin
-                logger.info(f"Loaded plugin: {plugin.name} v{plugin.version} "
-                          f"({len(plugin.tools)} tools, {len(plugin.commands)} commands)")
+                logger.info(
+                    f"Loaded plugin: {plugin.name} v{plugin.version} "
+                    f"({len(plugin.tools)} tools, {len(plugin.commands)} commands)"
+                )
 
             except Exception as e:
                 logger.error(f"Failed to load plugin from {filename}: {e}")
@@ -73,6 +77,7 @@ class PluginManager:
         # Also try entry-point discovery as fallback
         try:
             from plugins import discover_plugins
+
             for name, cls in discover_plugins().items():
                 if name not in self.plugins:
                     plugin = cls(self.config, self.db, self.router)
@@ -98,7 +103,8 @@ class PluginManager:
             raise FileNotFoundError(f"Plugin file not found: {filename}")
 
         spec = importlib.util.spec_from_file_location(
-            f"plugins.{name}_plugin", filepath,
+            f"plugins.{name}_plugin",
+            filepath,
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
@@ -106,10 +112,12 @@ class PluginManager:
         plugin_cls = None
         for attr_name in dir(mod):
             attr = getattr(mod, attr_name)
-            if (isinstance(attr, type)
-                    and issubclass(attr, NexusPlugin)
-                    and attr is not NexusPlugin
-                    and attr is not BasePlugin):
+            if (
+                isinstance(attr, type)
+                and issubclass(attr, NexusPlugin)
+                and attr is not NexusPlugin
+                and attr is not BasePlugin
+            ):
                 plugin_cls = attr
                 break
 
@@ -165,11 +173,13 @@ class PluginManager:
         cmds = []
         for p in self.plugins.values():
             for name, info in p.commands.items():
-                cmds.append({
-                    "plugin": p.name,
-                    "command": f"/{name}",
-                    "description": info.get("description", ""),
-                })
+                cmds.append(
+                    {
+                        "plugin": p.name,
+                        "command": f"/{name}",
+                        "description": info.get("description", ""),
+                    }
+                )
         return cmds
 
     # ── Command Dispatch ──
@@ -240,7 +250,11 @@ class PluginManager:
         return await plugin.on_before_tool_call(tool_name, params)
 
     async def audit_tool_call(
-        self, plugin: NexusPlugin, tool_name: str, params: dict, result: Any,
+        self,
+        plugin: NexusPlugin,
+        tool_name: str,
+        params: dict,
+        result: Any,
     ) -> None:
         """Log tool call to audit trail."""
         await plugin.on_after_tool_call(tool_name, params, result)
@@ -260,7 +274,7 @@ class PluginManager:
         """Get system prompt additions from active plugins."""
         additions = []
         for name, plugin in self.plugins.items():
-            if hasattr(plugin, 'get_system_prompt_addition'):
+            if hasattr(plugin, "get_system_prompt_addition"):
                 try:
                     addition = plugin.get_system_prompt_addition()
                     if addition:

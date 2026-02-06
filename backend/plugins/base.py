@@ -7,6 +7,7 @@ Every plugin must:
 
 Plugins are discovered by scanning the ``plugins/`` directory for ``*_plugin.py`` files.
 """
+
 from __future__ import annotations
 
 import abc
@@ -20,6 +21,7 @@ logger = logging.getLogger("nexus.plugins")
 @dataclass
 class ToolInfo:
     """Metadata for a tool registered by a plugin."""
+
     name: str
     description: str = ""
     parameters: dict = field(default_factory=dict)
@@ -97,12 +99,14 @@ class NexusPlugin(abc.ABC):
         handler: Callable,
     ) -> None:
         """Register a tool that the AI can call."""
-        self.tools.append(ToolInfo(
-            name=name,
-            description=description,
-            parameters=parameters,
-            handler=handler,
-        ))
+        self.tools.append(
+            ToolInfo(
+                name=name,
+                description=description,
+                parameters=parameters,
+                handler=handler,
+            )
+        )
 
     def add_command(
         self,
@@ -139,10 +143,7 @@ class NexusPlugin(abc.ABC):
         return [t.name for t in self.tools]
 
     def list_commands(self) -> list[dict[str, str]]:
-        return [
-            {"name": name, "description": info["description"]}
-            for name, info in self.commands.items()
-        ]
+        return [{"name": name, "description": info["description"]} for name, info in self.commands.items()]
 
     # ── Security hooks ──
 

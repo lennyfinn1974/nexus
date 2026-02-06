@@ -30,6 +30,7 @@ def _state(request: Request) -> Any:
 
 # ── Status & Health ──
 
+
 @router.get("/status", response_model=StatusResponse)
 async def api_status(request: Request):
     s = _state(request)
@@ -91,7 +92,8 @@ async def api_health(request: Request):
     # Filesystem
     try:
         import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', delete=True) as f:
+
+        with tempfile.NamedTemporaryFile(mode="w", delete=True) as f:
             f.write("test")
             f.flush()
         health_status["checks"]["filesystem"] = {"status": "healthy", "details": "Read/write successful"}
@@ -102,6 +104,7 @@ async def api_health(request: Request):
     # Memory
     try:
         import psutil
+
         memory = psutil.virtual_memory()
         pct = memory.percent
         health_status["checks"]["memory"] = {
@@ -119,6 +122,7 @@ async def api_health(request: Request):
 
 # ── Plugins ──
 
+
 @router.get("/plugins")
 async def api_plugins(request: Request):
     s = _state(request)
@@ -126,6 +130,7 @@ async def api_plugins(request: Request):
 
 
 # ── Skills ──
+
 
 @router.get("/skills")
 async def api_skills(request: Request):
@@ -142,6 +147,7 @@ async def api_delete_skill(skill_id: str, request: Request):
 
 # ── Tasks ──
 
+
 @router.get("/tasks")
 async def api_tasks(request: Request):
     s = _state(request)
@@ -149,6 +155,7 @@ async def api_tasks(request: Request):
 
 
 # ── Conversations ──
+
 
 @router.get("/conversations")
 async def api_conversations(request: Request):
@@ -193,6 +200,7 @@ async def api_delete_conversation(conv_id: str, request: Request):
 
 # ── Documents ──
 
+
 @router.get("/docs")
 async def api_docs(request: Request):
     s = _state(request)
@@ -234,10 +242,11 @@ async def api_ingest_all(request: Request):
 
 # ── Partner Agents (Phase 6 — Aries integration) ──
 
+
 @router.get("/partners")
 async def api_partners(request: Request):
     s = _state(request)
-    if not hasattr(s, 'partner_registry') or s.partner_registry is None:
+    if not hasattr(s, "partner_registry") or s.partner_registry is None:
         return JSONResponse({"partners": []})
     agents = await s.partner_registry.list_agents()
     return JSONResponse({"partners": [a.model_dump() for a in agents]})
@@ -246,10 +255,11 @@ async def api_partners(request: Request):
 @router.post("/partners/register")
 async def api_register_partner(request: Request):
     s = _state(request)
-    if not hasattr(s, 'partner_registry') or s.partner_registry is None:
+    if not hasattr(s, "partner_registry") or s.partner_registry is None:
         raise HTTPException(503, "Partner registry not initialized")
     body = await request.json()
     from schemas.partnerships import PartnerAgent
+
     agent = PartnerAgent(**body)
     await s.partner_registry.register(agent)
     return JSONResponse({"registered": agent.name})
@@ -258,10 +268,11 @@ async def api_register_partner(request: Request):
 @router.post("/partners/{name}/message")
 async def api_partner_message(name: str, request: Request):
     s = _state(request)
-    if not hasattr(s, 'partner_registry') or s.partner_registry is None:
+    if not hasattr(s, "partner_registry") or s.partner_registry is None:
         raise HTTPException(503, "Partner registry not initialized")
     body = await request.json()
     from schemas.partnerships import AgentMessage
+
     msg = AgentMessage(**body)
     response = await s.partner_registry.send_message(msg)
     return JSONResponse(response.model_dump(mode="json"))

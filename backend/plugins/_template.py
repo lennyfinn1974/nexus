@@ -47,18 +47,18 @@ class TemplatePlugin(NexusPlugin):
     def register_tools(self):
         """Register tools the AI can use."""
         self.add_tool(
-            "template_hello",                          # unique tool name
-            "Says hello — a demo tool",                # description for the AI
-            {"name": "Name to greet"},                 # parameter descriptions
-            self._hello,                               # async handler function
+            "template_hello",  # unique tool name
+            "Says hello — a demo tool",  # description for the AI
+            {"name": "Name to greet"},  # parameter descriptions
+            self._hello,  # async handler function
         )
 
     def register_commands(self):
         """Register slash commands for the user."""
         self.add_command(
-            "template",                                # command name (becomes /template)
-            "Template plugin demo command",            # description
-            self._handle_command,                      # async handler
+            "template",  # command name (becomes /template)
+            "Template plugin demo command",  # description
+            self._handle_command,  # async handler
         )
 
     # ── Your tool implementations ──

@@ -12,6 +12,7 @@ Usage:
     DATABASE_URL=postgresql+asyncpg://... \
     python -m scripts.migrate_sqlite_to_pg [--sqlite-path data/nexus.db] [--batch-size 500]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -56,6 +57,7 @@ logger = logging.getLogger("migrate")
 
 # ── Type conversion helpers ────────────────────────────────────
 
+
 def _parse_dt(val) -> datetime | None:
     """Parse ISO datetime string to a tz-aware datetime object."""
     if val is None or val == "":
@@ -93,88 +95,156 @@ def _parse_json(val):
 # column_converters: {column_name: converter_function}
 
 MIGRATION_SPECS = [
-    ("conversations", Conversation, {
-        "created_at": _parse_dt,
-        "updated_at": _parse_dt,
-    }),
-    ("messages", Message, {
-        "created_at": _parse_dt,
-    }),
-    ("skills", Skill, {
-        "created_at": _parse_dt,
-        "updated_at": _parse_dt,
-        "last_used_at": _parse_dt,
-    }),
-    ("tasks", Task, {
-        "created_at": _parse_dt,
-        "started_at": _parse_dt,
-        "completed_at": _parse_dt,
-    }),
-    ("settings", Setting, {
-        "encrypted": _parse_bool,
-        "updated_at": _parse_dt,
-    }),
-    ("settings_audit", SettingsAudit, {
-        "changed_at": _parse_dt,
-    }),
-    ("user_preferences", UserPreferenceModel, {
-        "first_learned": _parse_dt,
-        "last_updated": _parse_dt,
-    }),
-    ("project_contexts", ProjectContextModel, {
-        "tags": _parse_json,
-        "files_involved": _parse_json,
-        "created_at": _parse_dt,
-        "last_worked": _parse_dt,
-        "metadata": _parse_json,
-    }),
-    ("interaction_patterns", InteractionPatternModel, {
-        "triggers": _parse_json,
-        "first_seen": _parse_dt,
-        "last_seen": _parse_dt,
-        "metadata": _parse_json,
-    }),
-    ("session_contexts", SessionContextModel, {
-        "start_time": _parse_dt,
-        "end_time": _parse_dt,
-        "projects_worked": _parse_json,
-        "tools_used": _parse_json,
-        "skills_used": _parse_json,
-        "topics_discussed": _parse_json,
-        "key_achievements": _parse_json,
-        "challenges_faced": _parse_json,
-    }),
-    ("knowledge_associations", KnowledgeAssociation, {
-        "created_at": _parse_dt,
-    }),
-    ("user_goals", UserGoal, {
-        "target_date": _parse_dt,
-        "created_at": _parse_dt,
-        "last_updated": _parse_dt,
-        "milestones": _parse_json,
-        "success_criteria": _parse_json,
-        "related_projects": _parse_json,
-    }),
-    ("users", User, {
-        "active": _parse_bool,
-        "created_at": _parse_dt,
-        "last_login": _parse_dt,
-    }),
-    ("whitelist", Whitelist, {
-        "added_at": _parse_dt,
-    }),
-    ("sessions", ActiveSession, {
-        "created_at": _parse_dt,
-        "expires_at": _parse_dt,
-        "revoked": _parse_bool,
-    }),
-    ("blocked_ips", BlockedIP, {
-        "blocked_at": _parse_dt,
-    }),
-    ("auth_audit", AuthAudit, {
-        "success": _parse_bool,
-        "created_at": _parse_dt,
-    }),
+    (
+        "conversations",
+        Conversation,
+        {
+            "created_at": _parse_dt,
+            "updated_at": _parse_dt,
+        },
+    ),
+    (
+        "messages",
+        Message,
+        {
+            "created_at": _parse_dt,
+        },
+    ),
+    (
+        "skills",
+        Skill,
+        {
+            "created_at": _parse_dt,
+            "updated_at": _parse_dt,
+            "last_used_at": _parse_dt,
+        },
+    ),
+    (
+        "tasks",
+        Task,
+        {
+            "created_at": _parse_dt,
+            "started_at": _parse_dt,
+            "completed_at": _parse_dt,
+        },
+    ),
+    (
+        "settings",
+        Setting,
+        {
+            "encrypted": _parse_bool,
+            "updated_at": _parse_dt,
+        },
+    ),
+    (
+        "settings_audit",
+        SettingsAudit,
+        {
+            "changed_at": _parse_dt,
+        },
+    ),
+    (
+        "user_preferences",
+        UserPreferenceModel,
+        {
+            "first_learned": _parse_dt,
+            "last_updated": _parse_dt,
+        },
+    ),
+    (
+        "project_contexts",
+        ProjectContextModel,
+        {
+            "tags": _parse_json,
+            "files_involved": _parse_json,
+            "created_at": _parse_dt,
+            "last_worked": _parse_dt,
+            "metadata": _parse_json,
+        },
+    ),
+    (
+        "interaction_patterns",
+        InteractionPatternModel,
+        {
+            "triggers": _parse_json,
+            "first_seen": _parse_dt,
+            "last_seen": _parse_dt,
+            "metadata": _parse_json,
+        },
+    ),
+    (
+        "session_contexts",
+        SessionContextModel,
+        {
+            "start_time": _parse_dt,
+            "end_time": _parse_dt,
+            "projects_worked": _parse_json,
+            "tools_used": _parse_json,
+            "skills_used": _parse_json,
+            "topics_discussed": _parse_json,
+            "key_achievements": _parse_json,
+            "challenges_faced": _parse_json,
+        },
+    ),
+    (
+        "knowledge_associations",
+        KnowledgeAssociation,
+        {
+            "created_at": _parse_dt,
+        },
+    ),
+    (
+        "user_goals",
+        UserGoal,
+        {
+            "target_date": _parse_dt,
+            "created_at": _parse_dt,
+            "last_updated": _parse_dt,
+            "milestones": _parse_json,
+            "success_criteria": _parse_json,
+            "related_projects": _parse_json,
+        },
+    ),
+    (
+        "users",
+        User,
+        {
+            "active": _parse_bool,
+            "created_at": _parse_dt,
+            "last_login": _parse_dt,
+        },
+    ),
+    (
+        "whitelist",
+        Whitelist,
+        {
+            "added_at": _parse_dt,
+        },
+    ),
+    (
+        "sessions",
+        ActiveSession,
+        {
+            "created_at": _parse_dt,
+            "expires_at": _parse_dt,
+            "revoked": _parse_bool,
+        },
+    ),
+    (
+        "blocked_ips",
+        BlockedIP,
+        {
+            "blocked_at": _parse_dt,
+        },
+    ),
+    (
+        "auth_audit",
+        AuthAudit,
+        {
+            "success": _parse_bool,
+            "created_at": _parse_dt,
+        },
+    ),
 ]
 
 # Tables with auto-increment sequences that need resetting
@@ -254,14 +324,10 @@ async def reset_sequences(session_factory):
     async with session_factory() as session:
         for table, seq in _SEQUENCE_TABLES:
             try:
-                result = await session.execute(
-                    text(f"SELECT COALESCE(MAX(id), 0) FROM {table}")
-                )
+                result = await session.execute(text(f"SELECT COALESCE(MAX(id), 0) FROM {table}"))
                 max_id = result.scalar_one()
                 if max_id > 0:
-                    await session.execute(
-                        text(f"SELECT setval('{seq}', {max_id})")
-                    )
+                    await session.execute(text(f"SELECT setval('{seq}', {max_id})"))
                     logger.info(f"  Sequence {seq} reset to {max_id}")
             except Exception as e:
                 logger.warning(f"  Could not reset sequence {seq}: {e}")

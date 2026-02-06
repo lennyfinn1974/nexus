@@ -28,9 +28,13 @@ class OllamaClient:
             return self._supports_tools
         # Models known to support tool calling
         tool_capable = [
-            "llama3.1", "llama3.2", "llama3.3",
-            "mistral", "mixtral",
-            "qwen2", "qwen2.5",
+            "llama3.1",
+            "llama3.2",
+            "llama3.3",
+            "mistral",
+            "mixtral",
+            "qwen2",
+            "qwen2.5",
             "command-r",
             "kimi",
         ]

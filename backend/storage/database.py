@@ -37,7 +37,17 @@ def _row_to_dict(obj, columns: list[str]) -> dict:
 
 _CONV_COLS = ["id", "title", "created_at", "updated_at"]
 _MSG_COLS = ["id", "conversation_id", "role", "content", "model_used", "tokens_in", "tokens_out", "created_at"]
-_SKILL_COLS = ["id", "name", "description", "domain", "file_path", "created_at", "updated_at", "usage_count", "last_used_at"]
+_SKILL_COLS = [
+    "id",
+    "name",
+    "description",
+    "domain",
+    "file_path",
+    "created_at",
+    "updated_at",
+    "usage_count",
+    "last_used_at",
+]
 _TASK_COLS = ["id", "type", "status", "payload", "result", "error", "created_at", "started_at", "completed_at"]
 
 
@@ -69,9 +79,7 @@ class Database:
 
     async def list_conversations(self, limit: int = 50) -> list[dict]:
         async with self._session_factory() as session:
-            result = await session.execute(
-                select(Conversation).order_by(Conversation.updated_at.desc()).limit(limit)
-            )
+            result = await session.execute(select(Conversation).order_by(Conversation.updated_at.desc()).limit(limit))
             rows = result.scalars().all()
             return [_row_to_dict(r, _CONV_COLS) for r in rows]
 
@@ -114,11 +122,7 @@ class Database:
                 created_at=now,
             )
             session.add(msg)
-            await session.execute(
-                update(Conversation)
-                .where(Conversation.id == conv_id)
-                .values(updated_at=now)
-            )
+            await session.execute(update(Conversation).where(Conversation.id == conv_id).values(updated_at=now))
             await session.commit()
             await session.refresh(msg)
         return {"id": msg.id, "role": role, "content": content, "model_used": model_used}
@@ -131,9 +135,7 @@ class Database:
 
     async def rename_conversation(self, conv_id: str, title: str):
         async with self._session_factory() as session:
-            await session.execute(
-                update(Conversation).where(Conversation.id == conv_id).values(title=title)
-            )
+            await session.execute(update(Conversation).where(Conversation.id == conv_id).values(title=title))
             await session.commit()
 
     # ── Skills ───────────────────────────────────────────────────
@@ -149,26 +151,29 @@ class Database:
                 existing.file_path = file_path
                 existing.updated_at = now
             else:
-                session.add(Skill(
-                    id=skill_id, name=name, description=description,
-                    domain=domain, file_path=file_path, created_at=now, updated_at=now,
-                ))
+                session.add(
+                    Skill(
+                        id=skill_id,
+                        name=name,
+                        description=description,
+                        domain=domain,
+                        file_path=file_path,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
             await session.commit()
         return {"id": skill_id, "name": name, "domain": domain}
 
     async def list_skills(self) -> list[dict]:
         async with self._session_factory() as session:
-            result = await session.execute(
-                select(Skill).order_by(Skill.usage_count.desc())
-            )
+            result = await session.execute(select(Skill).order_by(Skill.usage_count.desc()))
             return [_row_to_dict(r, _SKILL_COLS) for r in result.scalars().all()]
 
     async def find_skills_by_domain(self, domain: str) -> list[dict]:
         async with self._session_factory() as session:
             result = await session.execute(
-                select(Skill)
-                .where(Skill.domain.ilike(f"%{domain}%"))
-                .order_by(Skill.usage_count.desc())
+                select(Skill).where(Skill.domain.ilike(f"%{domain}%")).order_by(Skill.usage_count.desc())
             )
             return [_row_to_dict(r, _SKILL_COLS) for r in result.scalars().all()]
 
@@ -176,9 +181,7 @@ class Database:
         now = datetime.now(timezone.utc)
         async with self._session_factory() as session:
             await session.execute(
-                update(Skill)
-                .where(Skill.id == skill_id)
-                .values(usage_count=Skill.usage_count + 1, last_used_at=now)
+                update(Skill).where(Skill.id == skill_id).values(usage_count=Skill.usage_count + 1, last_used_at=now)
             )
             await session.commit()
 
@@ -192,12 +195,14 @@ class Database:
     async def create_task(self, task_id: str, task_type: str, payload: dict = None) -> dict:
         now = datetime.now(timezone.utc)
         async with self._session_factory() as session:
-            session.add(Task(
-                id=task_id,
-                type=task_type,
-                payload=json.dumps(payload) if payload else None,
-                created_at=now,
-            ))
+            session.add(
+                Task(
+                    id=task_id,
+                    type=task_type,
+                    payload=json.dumps(payload) if payload else None,
+                    created_at=now,
+                )
+            )
             await session.commit()
         return {"id": task_id, "type": task_type, "status": "pending"}
 
@@ -216,9 +221,7 @@ class Database:
             values["error"] = error
 
         async with self._session_factory() as session:
-            await session.execute(
-                update(Task).where(Task.id == task_id).values(**values)
-            )
+            await session.execute(update(Task).where(Task.id == task_id).values(**values))
             await session.commit()
 
     async def list_tasks(self, status: str = None, limit: int = 50) -> list[dict]:

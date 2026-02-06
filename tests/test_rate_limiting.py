@@ -10,6 +10,7 @@ class TestRateLimiter:
 
     def test_allows_requests_under_limit(self):
         from middleware.rate_limit import RateLimiter
+
         limiter = RateLimiter(max_requests=5, window_seconds=60)
         for _ in range(5):
             allowed, remaining = limiter.is_allowed("test-ip")
@@ -17,6 +18,7 @@ class TestRateLimiter:
 
     def test_blocks_after_limit(self):
         from middleware.rate_limit import RateLimiter
+
         limiter = RateLimiter(max_requests=3, window_seconds=60)
         for _ in range(3):
             limiter.is_allowed("test-ip")
@@ -26,6 +28,7 @@ class TestRateLimiter:
 
     def test_different_keys_independent(self):
         from middleware.rate_limit import RateLimiter
+
         limiter = RateLimiter(max_requests=2, window_seconds=60)
         limiter.is_allowed("ip-1")
         limiter.is_allowed("ip-1")
@@ -38,6 +41,7 @@ class TestRateLimiter:
 
     def test_remaining_count(self):
         from middleware.rate_limit import RateLimiter
+
         limiter = RateLimiter(max_requests=5, window_seconds=60)
         _, remaining = limiter.is_allowed("test-ip")
         assert remaining == 4
@@ -45,6 +49,7 @@ class TestRateLimiter:
     def test_window_expiry(self):
         """Entries should expire after the window."""
         from middleware.rate_limit import RateLimiter
+
         limiter = RateLimiter(max_requests=1, window_seconds=1)
         limiter.is_allowed("test-ip")
         allowed, _ = limiter.is_allowed("test-ip")

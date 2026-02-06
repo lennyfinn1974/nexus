@@ -120,12 +120,14 @@ def mock_ollama_client():
     client = MagicMock()
     client.model = "test-model"
     client.is_available = AsyncMock(return_value=True)
-    client.chat = AsyncMock(return_value={
-        "content": "Mock Ollama response",
-        "model": "test-model",
-        "tokens_in": 10,
-        "tokens_out": 20,
-    })
+    client.chat = AsyncMock(
+        return_value={
+            "content": "Mock Ollama response",
+            "model": "test-model",
+            "tokens_in": 10,
+            "tokens_out": 20,
+        }
+    )
 
     async def mock_stream(messages, system=None, **kwargs):
         for chunk in ["Mock ", "streamed ", "response"]:
@@ -141,12 +143,14 @@ def mock_claude_client():
     client = MagicMock()
     client.model = "claude-test"
     client.is_available = AsyncMock(return_value=True)
-    client.chat = AsyncMock(return_value={
-        "content": "Mock Claude response",
-        "model": "claude-test",
-        "tokens_in": 15,
-        "tokens_out": 25,
-    })
+    client.chat = AsyncMock(
+        return_value={
+            "content": "Mock Claude response",
+            "model": "claude-test",
+            "tokens_in": 15,
+            "tokens_out": 25,
+        }
+    )
 
     async def mock_stream(messages, system=None, **kwargs):
         for chunk in ["Mock ", "Claude ", "stream"]:
@@ -198,16 +202,20 @@ def mock_skills_engine():
     se.list_skills = AsyncMock(return_value=[])
     se.build_skill_context = AsyncMock(return_value="")
     se.get_research_prompt = MagicMock(return_value="Research: test")
-    se.parse_research_output = MagicMock(return_value={
-        "name": "Test Skill",
-        "description": "A test skill",
-        "domain": "testing",
-        "content": "# Test\nTest content",
-    })
-    se.create_knowledge_skill = AsyncMock(return_value={
-        "id": "skill-test123",
-        "name": "Test Skill",
-    })
+    se.parse_research_output = MagicMock(
+        return_value={
+            "name": "Test Skill",
+            "description": "A test skill",
+            "domain": "testing",
+            "content": "# Test\nTest content",
+        }
+    )
+    se.create_knowledge_skill = AsyncMock(
+        return_value={
+            "id": "skill-test123",
+            "name": "Test Skill",
+        }
+    )
     se.execute_action = AsyncMock(return_value="Action executed")
     se.delete_skill = AsyncMock()
     return se
@@ -232,8 +240,13 @@ def mock_task_queue():
 
 @pytest_asyncio.fixture
 async def test_app(
-    tmp_base_dir, test_db, test_config,
-    mock_model_router, mock_plugin_manager, mock_skills_engine, mock_task_queue,
+    tmp_base_dir,
+    test_db,
+    test_config,
+    mock_model_router,
+    mock_plugin_manager,
+    mock_skills_engine,
+    mock_task_queue,
 ):
     """Create a FastAPI app with mocked state, bypassing lifespan."""
     env_patches = {
@@ -324,10 +337,16 @@ async def test_app(
 
         # Initialize admin module
         admin_init(
-            test_config, mock_plugin_manager, mock_model_router,
-            test_db, mock_task_queue, mock_skills_engine,
-            jwt_manager=mock_jwt, user_manager=mock_user_manager,
-            ip_security=mock_ip_security, audit_log=mock_audit_log,
+            test_config,
+            mock_plugin_manager,
+            mock_model_router,
+            test_db,
+            mock_task_queue,
+            mock_skills_engine,
+            jwt_manager=mock_jwt,
+            user_manager=mock_user_manager,
+            ip_security=mock_ip_security,
+            audit_log=mock_audit_log,
         )
 
         yield app

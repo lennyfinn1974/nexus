@@ -19,6 +19,7 @@ Folder layout::
         knowledge.md        # Context injected into prompts
         actions.py          # Optional: executable action handlers
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -56,6 +57,7 @@ KNOWLEDGE_TEMPLATE = """# {name}
 # ────────────────────────────────────────────────────────────────────
 # Data classes
 # ────────────────────────────────────────────────────────────────────
+
 
 class SkillAction:
     """An action exposed by a skill (lighter than a full plugin tool)."""
@@ -199,6 +201,7 @@ class Skill:
 # Engine
 # ────────────────────────────────────────────────────────────────────
 
+
 class SkillsEngine:
     """Load, match, invoke, and manage skills."""
 
@@ -268,9 +271,7 @@ class SkillsEngine:
                 "domain": s.get("domain", "general"),
                 "description": desc,
                 "triggers": {
-                    "keywords": re.findall(
-                        r"\w+", f"{name} {desc}".lower()
-                    ),
+                    "keywords": re.findall(r"\w+", f"{name} {desc}".lower()),
                 },
             }
             skill = Skill(os.path.dirname(file_path), manifest)
@@ -283,7 +284,8 @@ class SkillsEngine:
             return
         try:
             spec = importlib.util.spec_from_file_location(
-                f"skill_actions_{skill.id}", skill.actions_path,
+                f"skill_actions_{skill.id}",
+                skill.actions_path,
             )
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
@@ -292,12 +294,14 @@ class SkillsEngine:
                 handler_name = adef.get("handler", adef["name"])
                 handler = getattr(mod, handler_name, None)
                 if handler and callable(handler):
-                    skill.actions.append(SkillAction(
-                        name=adef["name"],
-                        description=adef.get("description", ""),
-                        parameters=adef.get("parameters", {}),
-                        handler=handler,
-                    ))
+                    skill.actions.append(
+                        SkillAction(
+                            name=adef["name"],
+                            description=adef.get("description", ""),
+                            parameters=adef.get("parameters", {}),
+                            handler=handler,
+                        )
+                    )
                     logger.info(f"  Action: {adef['name']}")
                 else:
                     logger.warning(f"  Action handler missing: {handler_name}")
@@ -329,7 +333,7 @@ class SkillsEngine:
                 if knowledge.startswith("---"):
                     end = knowledge.find("---", 3)
                     if end != -1:
-                        knowledge = knowledge[end + 3:].strip()
+                        knowledge = knowledge[end + 3 :].strip()
                 if len(knowledge) > 2000:
                     knowledge = knowledge[:2000] + "\n...(truncated)"
                 parts.append(f"### {skill.name}\n{knowledge}\n")
@@ -356,11 +360,9 @@ class SkillsEngine:
                 if action.name == action_name:
                     if self.config and not skill.is_configured(self.config):
                         missing = [
-                            k for k, s in skill.config_schema.items()
-                            if s.get("required") and not self.config.get(k)
+                            k for k, s in skill.config_schema.items() if s.get("required") and not self.config.get(k)
                         ]
-                        return (f"Skill '{skill.name}' not configured. "
-                                f"Missing: {', '.join(missing)}")
+                        return f"Skill '{skill.name}' not configured. " f"Missing: {', '.join(missing)}"
                     try:
                         params["_config"] = self.config
                         return str(await action.handler(params))
@@ -384,8 +386,16 @@ class SkillsEngine:
     # ── creation ──
 
     async def create_knowledge_skill(
-        self, name, domain, description, overview, concepts,
-        decision_guide, quick_reference, sources, keywords,
+        self,
+        name,
+        domain,
+        description,
+        overview,
+        concepts,
+        decision_guide,
+        quick_reference,
+        sources,
+        keywords,
     ) -> dict:
         """Create a knowledge skill from /learn output."""
         skill_id = f"skill-{uuid.uuid4().hex[:8]}"
@@ -406,15 +416,21 @@ class SkillsEngine:
             yaml.dump(manifest, f, default_flow_style=False)
 
         content = KNOWLEDGE_TEMPLATE.format(
-            name=name, overview=overview, concepts=concepts,
-            decision_guide=decision_guide, quick_reference=quick_reference,
+            name=name,
+            overview=overview,
+            concepts=concepts,
+            decision_guide=decision_guide,
+            quick_reference=quick_reference,
             sources=sources,
         )
         with open(os.path.join(skill_dir, "knowledge.md"), "w") as f:
             f.write(content)
 
         await self.db.save_skill(
-            skill_id, name, description, domain,
+            skill_id,
+            name,
+            description,
+            domain,
             os.path.join(skill_dir, "knowledge.md"),
         )
         skill = Skill(skill_dir, manifest)
@@ -425,6 +441,7 @@ class SkillsEngine:
     async def install_skill_pack(self, source_dir: str) -> dict:
         """Install a skill pack from a directory."""
         import shutil
+
         manifest_path = os.path.join(source_dir, "skill.yaml")
         if not os.path.exists(manifest_path):
             raise ValueError(f"No skill.yaml in {source_dir}")
@@ -442,14 +459,18 @@ class SkillsEngine:
         self._load_actions(skill)
         self.skills[skill_id] = skill
         await self.db.save_skill(
-            skill_id, skill.name, skill.description,
-            skill.domain, skill.knowledge_path,
+            skill_id,
+            skill.name,
+            skill.description,
+            skill.domain,
+            skill.knowledge_path,
         )
         logger.info(f"Installed skill pack: {skill.name}")
         return skill.to_dict()
 
     async def delete_skill(self, skill_id: str):
         import shutil
+
         d = os.path.join(self.skills_dir, skill_id)
         if os.path.isdir(d):
             shutil.rmtree(d)

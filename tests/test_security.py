@@ -99,36 +99,42 @@ class TestSSRFProtection:
     @pytest.mark.security
     async def test_ssrf_blocks_localhost(self):
         from admin import validate_url
+
         with pytest.raises(ValueError, match="blocked"):
             validate_url("http://localhost:8080/api")
 
     @pytest.mark.security
     async def test_ssrf_blocks_internal_ip(self):
         from admin import validate_url
+
         with pytest.raises(ValueError, match="blocked"):
             validate_url("http://127.0.0.1:8080/api")
 
     @pytest.mark.security
     async def test_ssrf_blocks_private_range(self):
         from admin import validate_url
+
         with pytest.raises(ValueError, match="blocked"):
             validate_url("http://192.168.1.1:8080")
 
     @pytest.mark.security
     async def test_ssrf_blocks_zero_address(self):
         from admin import validate_url
+
         with pytest.raises(ValueError, match="blocked"):
             validate_url("http://0.0.0.0:8080")
 
     @pytest.mark.security
     async def test_ssrf_blocks_non_http(self):
         from admin import validate_url
+
         with pytest.raises(ValueError, match="scheme"):
             validate_url("file:///etc/passwd")
 
     @pytest.mark.security
     async def test_ssrf_blocks_ftp(self):
         from admin import validate_url
+
         with pytest.raises(ValueError, match="scheme"):
             validate_url("ftp://evil.com/data")
 

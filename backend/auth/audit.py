@@ -30,10 +30,17 @@ class AuthAuditLog:
         now = datetime.now(timezone.utc)
         try:
             async with self._sf() as session:
-                session.add(AuthAudit(
-                    event_type=event_type, user_id=user_id, email=email,
-                    ip_address=ip_address, details=details, success=success, created_at=now,
-                ))
+                session.add(
+                    AuthAudit(
+                        event_type=event_type,
+                        user_id=user_id,
+                        email=email,
+                        ip_address=ip_address,
+                        details=details,
+                        success=success,
+                        created_at=now,
+                    )
+                )
                 await session.commit()
         except Exception as e:
             logger.error(f"Audit log failed: {e}")
@@ -47,12 +54,19 @@ class AuthAuditLog:
                 stmt = stmt.where(AuthAudit.event_type == event_type)
             stmt = stmt.order_by(AuthAudit.created_at.desc()).limit(limit)
             result = await session.execute(stmt)
-            return [{
-                "id": r.id, "event_type": r.event_type, "user_id": r.user_id,
-                "email": r.email, "ip_address": r.ip_address, "details": r.details,
-                "success": r.success,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-            } for r in result.scalars().all()]
+            return [
+                {
+                    "id": r.id,
+                    "event_type": r.event_type,
+                    "user_id": r.user_id,
+                    "email": r.email,
+                    "ip_address": r.ip_address,
+                    "details": r.details,
+                    "success": r.success,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in result.scalars().all()
+            ]
 
     async def get_failed_logins(self, ip: str = None, limit: int = 50) -> list:
         from storage.models import AuthAudit
@@ -63,19 +77,23 @@ class AuthAuditLog:
                 stmt = stmt.where(AuthAudit.ip_address == ip)
             stmt = stmt.order_by(AuthAudit.created_at.desc()).limit(limit)
             result = await session.execute(stmt)
-            return [{
-                "id": r.id, "event_type": r.event_type, "email": r.email,
-                "ip_address": r.ip_address, "details": r.details,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-            } for r in result.scalars().all()]
+            return [
+                {
+                    "id": r.id,
+                    "event_type": r.event_type,
+                    "email": r.email,
+                    "ip_address": r.ip_address,
+                    "details": r.details,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in result.scalars().all()
+            ]
 
     async def cleanup_old_events(self, days: int = 90) -> int:
         from storage.models import AuthAudit
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         async with self._sf() as session:
-            result = await session.execute(
-                sa_delete(AuthAudit).where(AuthAudit.created_at < cutoff)
-            )
+            result = await session.execute(sa_delete(AuthAudit).where(AuthAudit.created_at < cutoff))
             await session.commit()
             return result.rowcount

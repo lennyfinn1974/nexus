@@ -1,7 +1,6 @@
 """Tests for REST API endpoints."""
 
 
-
 class TestPublicEndpoints:
     async def test_serve_ui(self, client):
         resp = await client.get("/")

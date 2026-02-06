@@ -1,4 +1,5 @@
 """JWT token lifecycle — access tokens, refresh tokens, session management."""
+
 from __future__ import annotations
 
 import hashlib
@@ -16,8 +17,13 @@ logger = logging.getLogger("nexus.auth.jwt")
 class JWTManager:
     """Create and verify JWTs; manage refresh-token sessions in the DB."""
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession], nexus_secret: bytes,
-                 access_ttl: int = 1800, refresh_ttl: int = 604800):
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        nexus_secret: bytes,
+        access_ttl: int = 1800,
+        refresh_ttl: int = 604800,
+    ):
         self._sf = session_factory
         self._access_ttl = access_ttl
         self._refresh_ttl = refresh_ttl
@@ -64,15 +70,17 @@ class JWTManager:
         expires = now + timedelta(seconds=self._refresh_ttl)
 
         async with self._sf() as session:
-            session.add(ActiveSession(
-                id=session_id,
-                user_id=user["id"],
-                refresh_token_hash=token_hash,
-                ip_address=ip,
-                user_agent=user_agent,
-                created_at=now,
-                expires_at=expires,
-            ))
+            session.add(
+                ActiveSession(
+                    id=session_id,
+                    user_id=user["id"],
+                    refresh_token_hash=token_hash,
+                    ip_address=ip,
+                    user_agent=user_agent,
+                    created_at=now,
+                    expires_at=expires,
+                )
+            )
             await session.commit()
         return raw, session_id
 
@@ -132,18 +140,14 @@ class JWTManager:
         from storage.models import ActiveSession
 
         async with self._sf() as session:
-            await session.execute(
-                update(ActiveSession).where(ActiveSession.id == session_id).values(revoked=True)
-            )
+            await session.execute(update(ActiveSession).where(ActiveSession.id == session_id).values(revoked=True))
             await session.commit()
 
     async def revoke_all_user_sessions(self, user_id: str):
         from storage.models import ActiveSession
 
         async with self._sf() as session:
-            await session.execute(
-                update(ActiveSession).where(ActiveSession.user_id == user_id).values(revoked=True)
-            )
+            await session.execute(update(ActiveSession).where(ActiveSession.user_id == user_id).values(revoked=True))
             await session.commit()
 
     async def cleanup_expired_sessions(self) -> int:
@@ -152,9 +156,7 @@ class JWTManager:
         now = datetime.now(timezone.utc)
         async with self._sf() as session:
             result = await session.execute(
-                delete(ActiveSession).where(
-                    (ActiveSession.expires_at < now) | (ActiveSession.revoked)
-                )
+                delete(ActiveSession).where((ActiveSession.expires_at < now) | (ActiveSession.revoked))
             )
             await session.commit()
             return result.rowcount
@@ -164,19 +166,20 @@ class JWTManager:
 
         async with self._sf() as session:
             result = await session.execute(
-                select(ActiveSession)
-                .where(ActiveSession.user_id == user_id)
-                .order_by(ActiveSession.created_at.desc())
+                select(ActiveSession).where(ActiveSession.user_id == user_id).order_by(ActiveSession.created_at.desc())
             )
             rows = result.scalars().all()
-            return [{
-                "id": r.id,
-                "ip_address": r.ip_address,
-                "user_agent": r.user_agent,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-                "expires_at": r.expires_at.isoformat() if r.expires_at else None,
-                "revoked": r.revoked,
-            } for r in rows]
+            return [
+                {
+                    "id": r.id,
+                    "ip_address": r.ip_address,
+                    "user_agent": r.user_agent,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+                    "revoked": r.revoked,
+                }
+                for r in rows
+            ]
 
     # ── Short-lived WS Token ─────────────────────────────────────
 

@@ -9,13 +9,24 @@ logger = logging.getLogger("nexus.ingest")
 
 # Supported file types
 SUPPORTED_EXTENSIONS = {
-    ".txt", ".md", ".markdown",
+    ".txt",
+    ".md",
+    ".markdown",
     ".pdf",
     ".docx",
     ".csv",
     ".json",
-    ".html", ".htm",
-    ".py", ".js", ".ts", ".sh", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+    ".html",
+    ".htm",
+    ".py",
+    ".js",
+    ".ts",
+    ".sh",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
 }
 
 # Max file size: 10MB
@@ -32,6 +43,7 @@ def _read_pdf(path):
     """Read a PDF file. Requires PyPDF2."""
     try:
         from PyPDF2 import PdfReader
+
         reader = PdfReader(path)
         pages = []
         for page in reader.pages:
@@ -51,6 +63,7 @@ def _read_docx(path):
     """Read a Word document. Requires python-docx."""
     try:
         from docx import Document
+
         doc = Document(path)
         paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
         return "\n\n".join(paragraphs)
@@ -108,14 +121,16 @@ def scan_directory(docs_dir):
             rel_path = os.path.relpath(full_path, docs_dir)
             size = os.path.getsize(full_path)
 
-            files.append({
-                "path": full_path,
-                "relative_path": rel_path,
-                "name": fname,
-                "extension": ext,
-                "size": size,
-                "hash": file_hash(full_path),
-            })
+            files.append(
+                {
+                    "path": full_path,
+                    "relative_path": rel_path,
+                    "name": fname,
+                    "extension": ext,
+                    "size": size,
+                    "hash": file_hash(full_path),
+                }
+            )
 
     return files
 

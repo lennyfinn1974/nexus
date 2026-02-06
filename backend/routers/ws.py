@@ -63,7 +63,9 @@ async def websocket_chat(ws: WebSocket):
                 if choice in ("claude", "local", "ollama"):
                     force = "claude" if choice == "claude" else "ollama"
                     websocket_manager.update_session_data(ws_id, {"force_model": force})
-                    await websocket_manager.send_to_client(ws_id, {"type": "system", "content": f"Model set to: {choice}"})
+                    await websocket_manager.send_to_client(
+                        ws_id, {"type": "system", "content": f"Model set to: {choice}"}
+                    )
                 else:
                     websocket_manager.update_session_data(ws_id, {"force_model": None})
                     await websocket_manager.send_to_client(ws_id, {"type": "system", "content": "Model set to: auto"})
@@ -74,14 +76,20 @@ async def websocket_chat(ws: WebSocket):
                 session_data = websocket_manager.get_session_data(ws_id)
                 force_model = session_data.get("force_model") if session_data else None
                 response = await process_message(
-                    ws_id, text,
-                    cfg=s.cfg, db=s.db, skills_engine=s.skills_engine,
-                    model_router=s.model_router, task_queue=s.task_queue,
+                    ws_id,
+                    text,
+                    cfg=s.cfg,
+                    db=s.db,
+                    skills_engine=s.skills_engine,
+                    model_router=s.model_router,
+                    task_queue=s.task_queue,
                     plugin_manager=s.plugin_manager,
-                    tool_executor=getattr(s, 'tool_executor', None),
+                    tool_executor=getattr(s, "tool_executor", None),
                     force_model=force_model,
                 )
-                await websocket_manager.send_to_client(ws_id, {"type": "message", "content": response, "model": "system"})
+                await websocket_manager.send_to_client(
+                    ws_id, {"type": "message", "content": response, "model": "system"}
+                )
                 continue
 
             # ── Ensure conversation exists ──
@@ -93,11 +101,14 @@ async def websocket_chat(ws: WebSocket):
                 conv_id = f"conv-{uuid.uuid4().hex[:8]}"
                 await s.db.create_conversation(conv_id, title=text[:50])
                 websocket_manager.update_session_data(ws_id, {"conv_id": conv_id})
-                await websocket_manager.send_to_client(ws_id, {
-                    "type": "conversation_set",
-                    "conv_id": conv_id,
-                    "title": text[:50],
-                })
+                await websocket_manager.send_to_client(
+                    ws_id,
+                    {
+                        "type": "conversation_set",
+                        "conv_id": conv_id,
+                        "title": text[:50],
+                    },
+                )
 
             try:
                 await _stream_and_tool_loop(ws_id, text, conv_id, force_model, s)
@@ -126,31 +137,40 @@ async def _handle_set_conversation(ws_id: str, msg: dict, s: Any) -> None:
         if conv:
             websocket_manager.update_session_data(ws_id, {"conv_id": new_id})
             logger.info(f"[{ws_id}] Switched to conversation {new_id}")
-            await websocket_manager.send_to_client(ws_id, {
-                "type": "conversation_set",
-                "conv_id": new_id,
-                "title": conv["title"],
-            })
+            await websocket_manager.send_to_client(
+                ws_id,
+                {
+                    "type": "conversation_set",
+                    "conv_id": new_id,
+                    "title": conv["title"],
+                },
+            )
         else:
             logger.warning(f"[{ws_id}] Conversation {new_id} not found, creating new")
             conv_id = f"conv-{uuid.uuid4().hex[:8]}"
             await s.db.create_conversation(conv_id, title="New Conversation")
             websocket_manager.update_session_data(ws_id, {"conv_id": conv_id})
-            await websocket_manager.send_to_client(ws_id, {
-                "type": "conversation_set",
-                "conv_id": conv_id,
-                "title": "New Conversation",
-            })
+            await websocket_manager.send_to_client(
+                ws_id,
+                {
+                    "type": "conversation_set",
+                    "conv_id": conv_id,
+                    "title": "New Conversation",
+                },
+            )
     else:
         conv_id = f"conv-{uuid.uuid4().hex[:8]}"
         await s.db.create_conversation(conv_id, title="New Conversation")
         websocket_manager.update_session_data(ws_id, {"conv_id": conv_id})
         logger.info(f"[{ws_id}] Created new conversation {conv_id}")
-        await websocket_manager.send_to_client(ws_id, {
-            "type": "conversation_set",
-            "conv_id": conv_id,
-            "title": "New Conversation",
-        })
+        await websocket_manager.send_to_client(
+            ws_id,
+            {
+                "type": "conversation_set",
+                "conv_id": conv_id,
+                "title": "New Conversation",
+            },
+        )
 
 
 async def _stream_and_tool_loop(
@@ -180,40 +200,35 @@ async def _stream_and_tool_loop(
         if len(text) > 60:
             title = title.rsplit(" ", 1)[0] + "..."
         await s.db.rename_conversation(conv_id, title)
-        await websocket_manager.send_to_client(ws_id, {
-            "type": "conversation_renamed",
-            "conv_id": conv_id,
-            "title": title,
-        })
+        await websocket_manager.send_to_client(
+            ws_id,
+            {
+                "type": "conversation_renamed",
+                "conv_id": conv_id,
+                "title": title,
+            },
+        )
 
     # ── Stream + Tool Loop ──
     round_num = 0
     final_response = ""
 
     while round_num <= MAX_TOOL_ROUNDS:
-        model_name, stream = await s.model_router.chat_stream(
-            messages, system=system, force_model=force_model
-        )
-        await websocket_manager.send_to_client(ws_id, {
-            "type": "stream_start", "model": model_name
-        })
+        model_name, stream = await s.model_router.chat_stream(messages, system=system, force_model=force_model)
+        await websocket_manager.send_to_client(ws_id, {"type": "stream_start", "model": model_name})
 
         full_response = ""
         async for chunk in stream:
             full_response += chunk
-            await websocket_manager.send_to_client(ws_id, {
-                "type": "stream_chunk", "content": chunk
-            })
+            await websocket_manager.send_to_client(ws_id, {"type": "stream_chunk", "content": chunk})
 
-        await websocket_manager.send_to_client(ws_id, {
-            "type": "stream_end", "model": model_name
-        })
+        await websocket_manager.send_to_client(ws_id, {"type": "stream_end", "model": model_name})
 
         # ── Check for tool calls ──
         tool_results = []
 
         # Native tool calling (if tool_executor available and mode is native)
-        tool_executor = getattr(s, 'tool_executor', None)
+        tool_executor = getattr(s, "tool_executor", None)
         if tool_executor and tool_mode == "native":
             # In native mode, tool calls come as structured data from the model
             # For now, also check legacy patterns as fallback
@@ -248,19 +263,19 @@ async def _stream_and_tool_loop(
                 tool_feedback_parts.append(f"**{name}** error: {tr.get('error', 'unknown')}")
         tool_feedback = "\n\n".join(tool_feedback_parts)
 
-        await websocket_manager.send_to_client(ws_id, {
-            "type": "system",
-            "content": f"Executed {len(tool_results)} tool(s)..."
-        })
+        await websocket_manager.send_to_client(
+            ws_id, {"type": "system", "content": f"Executed {len(tool_results)} tool(s)..."}
+        )
 
         messages.append({"role": "assistant", "content": full_response})
-        messages.append({"role": "user", "content":
-            f"[Tool Results -- Round {round_num}]\n\n"
-            f"{tool_feedback}\n\n"
-            f"Use these results to continue. If you need more tools, "
-            f"call them. Otherwise give your final answer."
-        })
+        messages.append(
+            {
+                "role": "user",
+                "content": f"[Tool Results -- Round {round_num}]\n\n"
+                f"{tool_feedback}\n\n"
+                f"Use these results to continue. If you need more tools, "
+                f"call them. Otherwise give your final answer.",
+            }
+        )
 
-    await s.db.add_message(
-        conv_id, "assistant", final_response, model_used=model_name
-    )
+    await s.db.add_message(conv_id, "assistant", final_response, model_used=model_name)

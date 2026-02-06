@@ -1,7 +1,6 @@
 """Tests for the SQLite database layer."""
 
 
-
 class TestConversations:
     async def test_create_conversation(self, test_db):
         conv = await test_db.create_conversation("conv-test1", title="Hello World")
@@ -65,8 +64,12 @@ class TestMessages:
     async def test_message_token_tracking(self, test_db):
         await test_db.create_conversation("conv-tok", title="Tokens")
         msg = await test_db.add_message(
-            "conv-tok", "assistant", "Response",
-            model_used="claude-test", tokens_in=100, tokens_out=200,
+            "conv-tok",
+            "assistant",
+            "Response",
+            model_used="claude-test",
+            tokens_in=100,
+            tokens_out=200,
         )
         assert msg["model_used"] == "claude-test"
 

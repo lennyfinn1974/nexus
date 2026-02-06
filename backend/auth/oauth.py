@@ -1,4 +1,5 @@
 """Google OAuth 2.0 — authorization code flow with CSRF state protection."""
+
 from __future__ import annotations
 
 import hashlib
@@ -83,13 +84,16 @@ class OAuthManager:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 # Exchange code for tokens
-                token_resp = await client.post(GOOGLE_TOKEN_URL, data={
-                    "client_id": self._client_id(),
-                    "client_secret": self._client_secret(),
-                    "code": code,
-                    "grant_type": "authorization_code",
-                    "redirect_uri": redirect_uri,
-                })
+                token_resp = await client.post(
+                    GOOGLE_TOKEN_URL,
+                    data={
+                        "client_id": self._client_id(),
+                        "client_secret": self._client_secret(),
+                        "code": code,
+                        "grant_type": "authorization_code",
+                        "redirect_uri": redirect_uri,
+                    },
+                )
                 if token_resp.status_code != 200:
                     logger.error(f"Token exchange failed: {token_resp.status_code} {token_resp.text}")
                     return None

@@ -23,8 +23,11 @@ class AgentMessage(BaseModel):
     sender: str
     recipient: str
     type: Literal[
-        "task_request", "task_result", "handoff",
-        "status_query", "capability_query",
+        "task_request",
+        "task_result",
+        "handoff",
+        "status_query",
+        "capability_query",
     ]
     payload: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

@@ -18,6 +18,7 @@ def discover_plugins() -> dict[str, type[NexusPlugin]]:
     plugins: dict[str, type[NexusPlugin]] = {}
     try:
         from importlib.metadata import entry_points
+
         eps = entry_points()
         nexus_eps = eps.get("nexus.plugins", []) if isinstance(eps, dict) else eps.select(group="nexus.plugins")
         for ep in nexus_eps:

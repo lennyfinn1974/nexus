@@ -79,9 +79,7 @@ class Skill(Base):
     usage_count = Column(Integer, default=0)
     last_used_at = Column(DateTime(timezone=True), nullable=True)
 
-    __table_args__ = (
-        Index("idx_skills_domain", "domain"),
-    )
+    __table_args__ = (Index("idx_skills_domain", "domain"),)
 
 
 class Task(Base):
@@ -145,9 +143,7 @@ class UserPreferenceModel(Base):
     first_learned = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
     last_updated = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
 
-    __table_args__ = (
-        Index("idx_preferences_category", "category"),
-    )
+    __table_args__ = (Index("idx_preferences_category", "category"),)
 
 
 class ProjectContextModel(Base):
@@ -185,9 +181,7 @@ class InteractionPatternModel(Base):
     last_seen = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
     metadata_ = Column("metadata", JSONB, nullable=True)
 
-    __table_args__ = (
-        Index("idx_patterns_type", "context_type", "frequency"),
-    )
+    __table_args__ = (Index("idx_patterns_type", "context_type", "frequency"),)
 
 
 class SessionContextModel(Base):
@@ -208,9 +202,7 @@ class SessionContextModel(Base):
     challenges_faced = Column(JSONB, nullable=True)
     continuation_context = Column(Text, nullable=True)
 
-    __table_args__ = (
-        Index("idx_sessions_time", "start_time", "conversation_id"),
-    )
+    __table_args__ = (Index("idx_sessions_time", "start_time", "conversation_id"),)
 
 
 class KnowledgeAssociation(Base):
@@ -225,9 +217,7 @@ class KnowledgeAssociation(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
     reinforced_count = Column(Integer, default=1)
 
-    __table_args__ = (
-        Index("idx_knowledge_concepts", "from_concept", "to_concept"),
-    )
+    __table_args__ = (Index("idx_knowledge_concepts", "from_concept", "to_concept"),)
 
 
 class UserGoal(Base):
@@ -314,9 +304,7 @@ class BlockedIP(Base):
     blocked_by = Column(String, nullable=True)
     blocked_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
 
-    __table_args__ = (
-        Index("idx_blocked_ips_addr", "ip_address"),
-    )
+    __table_args__ = (Index("idx_blocked_ips_addr", "ip_address"),)
 
 
 class AuthAudit(Base):

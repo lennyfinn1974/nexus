@@ -17,6 +17,7 @@ class ToolParameter(BaseModel):
 
 class ToolDefinition(BaseModel):
     """Describes a tool that can be called by the model."""
+
     name: str
     plugin: str
     description: str = ""
@@ -72,6 +73,7 @@ class ToolDefinition(BaseModel):
 
 class ToolCall(BaseModel):
     """A parsed tool call from the model's response."""
+
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
     name: str
     plugin: str
@@ -80,6 +82,7 @@ class ToolCall(BaseModel):
 
 class ToolResult(BaseModel):
     """The result of executing a tool call."""
+
     tool_call_id: str
     name: str
     result: str | None = None

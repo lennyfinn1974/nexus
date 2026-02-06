@@ -31,7 +31,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
         except Exception:
             duration_ms = (time.monotonic() - start) * 1000
             access_logger.error(
-                '%s %s -> 500 (%.1fms) [rid:%s]\n%s',
+                "%s %s -> 500 (%.1fms) [rid:%s]\n%s",
                 request.method,
                 request.url.path,
                 duration_ms,
@@ -44,7 +44,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
         status = response.status_code
         log_fn = access_logger.warning if status >= 400 else access_logger.info
         log_fn(
-            '%s %s -> %d (%.1fms) [rid:%s] ip:%s',
+            "%s %s -> %d (%.1fms) [rid:%s] ip:%s",
             request.method,
             request.url.path,
             status,

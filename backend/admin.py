@@ -69,12 +69,12 @@ router = APIRouter(
 )
 
 # Injected at startup
-_cfg = None          # ConfigManager
-_plugins = None      # PluginManager
-_models = None       # ModelRouter
-_skills = None       # SkillsEngine
-_db = None           # Database
-_task_queue = None   # TaskQueue
+_cfg = None  # ConfigManager
+_plugins = None  # PluginManager
+_models = None  # ModelRouter
+_skills = None  # SkillsEngine
+_db = None  # Database
+_task_queue = None  # TaskQueue
 
 # In-memory log buffer for streaming
 _log_buffer: deque = deque(maxlen=500)
@@ -83,8 +83,10 @@ _log_subscribers: list = []
 
 # ── Log capture handler ─────────────────────────────────────────
 
+
 class AdminLogHandler(logging.Handler):
     """Captures log records for the admin log viewer."""
+
     def emit(self, record):
         entry = {
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -100,8 +102,18 @@ class AdminLogHandler(logging.Handler):
                 pass
 
 
-def init(config_manager, plugin_manager, model_router, database, task_queue, skills_engine=None,
-         jwt_manager=None, user_manager=None, ip_security=None, audit_log=None):
+def init(
+    config_manager,
+    plugin_manager,
+    model_router,
+    database,
+    task_queue,
+    skills_engine=None,
+    jwt_manager=None,
+    user_manager=None,
+    ip_security=None,
+    audit_log=None,
+):
     """Called from app.py during startup."""
     global _cfg, _plugins, _models, _db, _task_queue, _skills
     global _jwt_manager, _user_manager, _ip_security, _audit_log
@@ -123,6 +135,7 @@ def init(config_manager, plugin_manager, model_router, database, task_queue, ski
 
 
 # ── SSRF Protection ─────────────────────────────────────────────
+
 
 def validate_url(url: str) -> str:
     """Validate a URL is safe to request (not targeting internal networks).
@@ -182,6 +195,7 @@ _URL_SETTINGS = {"OLLAMA_BASE_URL"}
 
 # ── Settings ────────────────────────────────────────────────────
 
+
 @router.get("/settings")
 async def get_settings():
     return JSONResponse({"settings": _cfg.get_all_for_api()})
@@ -204,17 +218,18 @@ async def update_settings(request: Request):
             try:
                 validate_url(str(value))
             except ValueError as e:
-                return JSONResponse(
-                    {"error": f"Invalid URL for {key}: {e}"}, status_code=400)
+                return JSONResponse({"error": f"Invalid URL for {key}: {e}"}, status_code=400)
         clean[key] = value
 
     changed = await _cfg.set_many(clean, changed_by="admin")
 
-    return JSONResponse({
-        "updated": changed,
-        "count": len(changed),
-        "message": f"Saved {len(changed)} setting(s)." if changed else "No changes detected.",
-    })
+    return JSONResponse(
+        {
+            "updated": changed,
+            "count": len(changed),
+            "message": f"Saved {len(changed)} setting(s)." if changed else "No changes detected.",
+        }
+    )
 
 
 @router.post("/settings/test/{key}")
@@ -226,9 +241,11 @@ async def test_setting(key: str):
             return JSONResponse({"success": False, "error": "No API key set"})
         try:
             import anthropic
+
             client = anthropic.AsyncAnthropic(api_key=api_key)
             resp = await client.messages.create(
-                model=_cfg.claude_model, max_tokens=10,
+                model=_cfg.claude_model,
+                max_tokens=10,
                 messages=[{"role": "user", "content": "ping"}],
             )
             await client.close()
@@ -240,11 +257,14 @@ async def test_setting(key: str):
         try:
             base_url = validate_url(_cfg.ollama_base_url)
             import httpx
+
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(f"{base_url}/api/tags")
                 models = resp.json().get("models", [])
                 names = [m["name"] for m in models[:5]]
-                return JSONResponse({"success": True, "message": f"Connected — {len(models)} models: {', '.join(names)}"})
+                return JSONResponse(
+                    {"success": True, "message": f"Connected — {len(models)} models: {', '.join(names)}"}
+                )
         except ValueError as e:
             return JSONResponse({"success": False, "error": f"URL blocked: {e}"})
         except Exception as e:
@@ -256,9 +276,12 @@ async def test_setting(key: str):
             return JSONResponse({"success": False, "error": "No token set"})
         try:
             import httpx
+
             async with httpx.AsyncClient() as client:
-                resp = await client.get("https://api.github.com/user",
-                    headers={"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"})
+                resp = await client.get(
+                    "https://api.github.com/user",
+                    headers={"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"},
+                )
                 if resp.status_code == 200:
                     user = resp.json().get("login", "unknown")
                     return JSONResponse({"success": True, "message": f"Authenticated as {user}"})
@@ -273,14 +296,16 @@ async def test_setting(key: str):
 async def get_models():
     """Get current model configuration and status."""
     status = _models.status
-    return JSONResponse({
-        "ollama_model": _cfg.ollama_model,
-        "ollama_base_url": _cfg.ollama_base_url,
-        "ollama_available": status["ollama_available"],
-        "claude_model": _cfg.claude_model,
-        "claude_available": status["claude_available"],
-        "complexity_threshold": _cfg.complexity_threshold,
-    })
+    return JSONResponse(
+        {
+            "ollama_model": _cfg.ollama_model,
+            "ollama_base_url": _cfg.ollama_base_url,
+            "ollama_available": status["ollama_available"],
+            "claude_model": _cfg.claude_model,
+            "claude_available": status["claude_available"],
+            "complexity_threshold": _cfg.complexity_threshold,
+        }
+    )
 
 
 @router.get("/models/ollama-list")
@@ -289,14 +314,20 @@ async def list_ollama_models():
     try:
         base_url = validate_url(_cfg.ollama_base_url)
         import httpx
+
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(f"{base_url}/api/tags")
             if resp.status_code == 200:
                 models = resp.json().get("models", [])
-                return JSONResponse({
-                    "success": True,
-                    "models": [{"name": m["name"], "size": m.get("size", 0), "modified": m.get("modified_at", "")} for m in models],
-                })
+                return JSONResponse(
+                    {
+                        "success": True,
+                        "models": [
+                            {"name": m["name"], "size": m.get("size", 0), "modified": m.get("modified_at", "")}
+                            for m in models
+                        ],
+                    }
+                )
             return JSONResponse({"success": False, "models": [], "error": f"Ollama returned {resp.status_code}"})
     except ValueError as e:
         return JSONResponse({"success": False, "models": [], "error": f"URL blocked: {e}"})
@@ -305,6 +336,7 @@ async def list_ollama_models():
 
 
 # ── Plugins ─────────────────────────────────────────────────────
+
 
 @router.get("/plugins")
 async def get_plugins():
@@ -317,17 +349,23 @@ async def get_plugins():
             except Exception as e:
                 health = {"status": "error", "message": str(e)}
 
-        active.append({
-            "name": name,
-            "description": plugin.description,
-            "version": plugin.version,
-            "enabled": plugin.enabled,
-            "health": health,
-            "tools": [{"name": t.name, "description": t.description, "parameters": t.parameters} for t in plugin.tools],
-            "commands": [{"command": f"/{cmd}", "description": info["description"]} for cmd, info in plugin.commands.items()],
-            "required_settings": getattr(plugin, "required_settings", {}),
-            "pip_requires": getattr(plugin, "pip_requires", []),
-        })
+        active.append(
+            {
+                "name": name,
+                "description": plugin.description,
+                "version": plugin.version,
+                "enabled": plugin.enabled,
+                "health": health,
+                "tools": [
+                    {"name": t.name, "description": t.description, "parameters": t.parameters} for t in plugin.tools
+                ],
+                "commands": [
+                    {"command": f"/{cmd}", "description": info["description"]} for cmd, info in plugin.commands.items()
+                ],
+                "required_settings": getattr(plugin, "required_settings", {}),
+                "pip_requires": getattr(plugin, "pip_requires", []),
+            }
+        )
 
     # Discover available-but-not-loaded plugins
     plugins_dir = os.path.join(_cfg.base_dir, "backend", "plugins")
@@ -337,7 +375,9 @@ async def get_plugins():
             if f.endswith("_plugin.py"):
                 pname = f.replace("_plugin.py", "")
                 if pname not in _plugins.plugins:
-                    available.append({"name": pname, "file": f, "enabled": False, "reason": "Dependencies not met or config missing"})
+                    available.append(
+                        {"name": pname, "file": f, "enabled": False, "reason": "Dependencies not met or config missing"}
+                    )
 
     return JSONResponse({"active": active, "available": available})
 
@@ -347,10 +387,12 @@ async def reload_plugin(name: str):
     """Reload a single plugin (works for both active and inactive plugins)."""
     try:
         plugin = await _plugins.reload_plugin(name, _cfg, _db, _models)
-        return JSONResponse({
-            "success": True,
-            "message": f"Plugin '{plugin.name}' loaded — {len(plugin.tools)} tools, {len(plugin.commands)} commands",
-        })
+        return JSONResponse(
+            {
+                "success": True,
+                "message": f"Plugin '{plugin.name}' loaded — {len(plugin.tools)} tools, {len(plugin.commands)} commands",
+            }
+        )
     except Exception as e:
         logger.error(f"Plugin reload failed for '{name}': {e}")
         return JSONResponse({"success": False, "error": str(e)})
@@ -363,16 +405,19 @@ async def reload_all_plugins():
         await _plugins.reload_all(_cfg, _db, _models)
         count = len(_plugins.plugins)
         tools = len(_plugins.all_tools)
-        return JSONResponse({
-            "success": True,
-            "message": f"Reloaded all plugins — {count} active, {tools} tools",
-        })
+        return JSONResponse(
+            {
+                "success": True,
+                "message": f"Reloaded all plugins — {count} active, {tools} tools",
+            }
+        )
     except Exception as e:
         logger.error(f"Reload-all failed: {e}")
         return JSONResponse({"success": False, "error": str(e)})
 
 
 # ── Server Restart ──────────────────────────────────────────────
+
 
 @router.post("/restart")
 async def restart_server():
@@ -393,19 +438,24 @@ async def restart_server():
 
 # ── System Prompt ───────────────────────────────────────────────
 
+
 @router.get("/system-prompt")
 async def get_system_prompt():
     from core.system_prompt import build_system_prompt
+
     prompt = build_system_prompt(_cfg, _plugins)
     plugin_additions = _plugins.get_system_prompt_additions() if _plugins else ""
-    return JSONResponse({
-        "base_prompt": prompt,
-        "plugin_additions": plugin_additions,
-        "full_prompt": prompt + plugin_additions,
-    })
+    return JSONResponse(
+        {
+            "base_prompt": prompt,
+            "plugin_additions": plugin_additions,
+            "full_prompt": prompt + plugin_additions,
+        }
+    )
 
 
 # ── Usage Tracking ──────────────────────────────────────────────
+
 
 @router.get("/usage")
 async def get_usage():
@@ -415,6 +465,7 @@ async def get_usage():
 
 
 # ── Conversations ───────────────────────────────────────────────
+
 
 @router.get("/conversations")
 async def list_conversations():
@@ -442,6 +493,7 @@ async def delete_all_conversations(request: Request):
 
 # ── Logs (SSE stream) ──────────────────────────────────────────
 
+
 @router.get("/logs")
 async def get_logs():
     return JSONResponse(list(_log_buffer))
@@ -464,11 +516,15 @@ async def stream_logs():
             if queue in _log_subscribers:
                 _log_subscribers.remove(queue)
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── System ──────────────────────────────────────────────────────
+
 
 @router.get("/system")
 async def get_system_info():
@@ -478,9 +534,7 @@ async def get_system_info():
     # Get database size from PostgreSQL
     db_size_mb = 0.0
     try:
-        rows = await _db.execute_query(
-            "SELECT pg_database_size(current_database()) as size"
-        )
+        rows = await _db.execute_query("SELECT pg_database_size(current_database()) as size")
         if rows:
             db_size_mb = round(rows[0][0] / 1048576, 2)
     except Exception:
@@ -490,25 +544,29 @@ async def get_system_info():
     if os.path.isdir(_cfg.skills_dir):
         skills_count = len([f for f in os.listdir(_cfg.skills_dir) if f.endswith(".md")])
 
-    return JSONResponse({
-        "python_version": sys.version.split()[0],
-        "platform": platform.platform(),
-        "base_dir": _cfg.base_dir,
-        "skills_dir": _cfg.skills_dir,
-        "docs_dir": _cfg.docs_dir,
-        "data_dir": _cfg.data_dir,
-        "db_backend": "postgresql",
-        "db_size_mb": db_size_mb,
-        "skills_count": skills_count,
-    })
+    return JSONResponse(
+        {
+            "python_version": sys.version.split()[0],
+            "platform": platform.platform(),
+            "base_dir": _cfg.base_dir,
+            "skills_dir": _cfg.skills_dir,
+            "docs_dir": _cfg.docs_dir,
+            "data_dir": _cfg.data_dir,
+            "db_backend": "postgresql",
+            "db_size_mb": db_size_mb,
+            "skills_count": skills_count,
+        }
+    )
 
 
 @router.post("/backup")
 async def create_backup():
-    return JSONResponse({
-        "error": "Backup is managed by Supabase. Use the Supabase dashboard "
-                 "or pg_dump for PostgreSQL backups.",
-    }, status_code=400)
+    return JSONResponse(
+        {
+            "error": "Backup is managed by Supabase. Use the Supabase dashboard " "or pg_dump for PostgreSQL backups.",
+        },
+        status_code=400,
+    )
 
 
 @router.get("/backups")
@@ -520,8 +578,13 @@ async def list_backups():
     for f in sorted(os.listdir(backup_dir), reverse=True):
         if f.endswith(".db"):
             path = os.path.join(backup_dir, f)
-            backups.append({"file": f, "size_mb": round(os.path.getsize(path) / 1048576, 2),
-                            "created": datetime.fromtimestamp(os.path.getmtime(path)).isoformat()})
+            backups.append(
+                {
+                    "file": f,
+                    "size_mb": round(os.path.getsize(path) / 1048576, 2),
+                    "created": datetime.fromtimestamp(os.path.getmtime(path)).isoformat(),
+                }
+            )
     return JSONResponse(backups)
 
 
@@ -532,6 +595,7 @@ async def get_audit_log():
 
 
 # ── Skills Management ────────────────────────────────────────────
+
 
 @router.get("/skills")
 async def list_skills_admin():
@@ -557,19 +621,22 @@ async def list_available_packs():
         if os.path.isdir(pack_path) and os.path.exists(manifest_path):
             try:
                 import yaml
+
                 with open(manifest_path) as f:
                     manifest = yaml.safe_load(f) or {}
                 installed = item in (_skills.skills if _skills else {})
-                packs.append({
-                    "id": manifest.get("id", item),
-                    "name": manifest.get("name", item),
-                    "type": manifest.get("type", "knowledge"),
-                    "description": manifest.get("description", ""),
-                    "domain": manifest.get("domain", ""),
-                    "version": manifest.get("version", "1.0"),
-                    "config_keys": list(manifest.get("config", {}).keys()),
-                    "installed": installed,
-                })
+                packs.append(
+                    {
+                        "id": manifest.get("id", item),
+                        "name": manifest.get("name", item),
+                        "type": manifest.get("type", "knowledge"),
+                        "description": manifest.get("description", ""),
+                        "domain": manifest.get("domain", ""),
+                        "version": manifest.get("version", "1.0"),
+                        "config_keys": list(manifest.get("config", {}).keys()),
+                        "installed": installed,
+                    }
+                )
             except Exception as e:
                 logger.error(f"Error reading pack {item}: {e}")
     return JSONResponse(packs)
@@ -609,14 +676,17 @@ async def get_skill_config(skill_id: str):
     if not _skills or skill_id not in _skills.skills:
         return JSONResponse({"error": "Skill not found"}, status_code=404)
     skill = _skills.skills[skill_id]
-    return JSONResponse({
-        "skill": skill.to_dict(),
-        "config_status": skill.get_config_status(_cfg) if _cfg else {},
-        "configured": skill.is_configured(_cfg) if _cfg else True,
-    })
+    return JSONResponse(
+        {
+            "skill": skill.to_dict(),
+            "config_status": skill.get_config_status(_cfg) if _cfg else {},
+            "configured": skill.is_configured(_cfg) if _cfg else True,
+        }
+    )
 
 
 # ── User Management ──────────────────────────────────────────
+
 
 @router.get("/users")
 async def list_users():
@@ -637,8 +707,12 @@ async def update_user_role(user_id: str, request: Request):
         raise HTTPException(400, "Invalid role")
     getattr(request.state, "user", None)
     if _audit_log:
-        await _audit_log.log_event("user_role_change", user_id=user_id, details=f"role={role}",
-                                   ip_address=request.client.host if request.client else "")
+        await _audit_log.log_event(
+            "user_role_change",
+            user_id=user_id,
+            details=f"role={role}",
+            ip_address=request.client.host if request.client else "",
+        )
     return JSONResponse({"ok": True, "user_id": user_id, "role": role})
 
 
@@ -662,6 +736,7 @@ async def activate_user(user_id: str):
 
 # ── Whitelist Management ─────────────────────────────────────
 
+
 @router.get("/whitelist")
 async def list_whitelist():
     if not _user_manager:
@@ -681,8 +756,12 @@ async def add_to_whitelist(request: Request):
     added_by = admin_user.get("email", "") if admin_user else ""
     ok = await _user_manager.add_to_whitelist(email, added_by)
     if _audit_log:
-        await _audit_log.log_event("whitelist_add", email=email, details=f"added_by={added_by}",
-                                   ip_address=request.client.host if request.client else "")
+        await _audit_log.log_event(
+            "whitelist_add",
+            email=email,
+            details=f"added_by={added_by}",
+            ip_address=request.client.host if request.client else "",
+        )
     return JSONResponse({"ok": ok, "email": email})
 
 
@@ -692,12 +771,14 @@ async def remove_from_whitelist(email: str, request: Request):
         raise HTTPException(500, "Auth not initialized")
     await _user_manager.remove_from_whitelist(email)
     if _audit_log:
-        await _audit_log.log_event("whitelist_remove", email=email,
-                                   ip_address=request.client.host if request.client else "")
+        await _audit_log.log_event(
+            "whitelist_remove", email=email, ip_address=request.client.host if request.client else ""
+        )
     return JSONResponse({"ok": True, "email": email})
 
 
 # ── IP Security Management ───────────────────────────────────
+
 
 @router.get("/blocked-ips")
 async def list_blocked_ips():
@@ -719,8 +800,9 @@ async def block_ip(request: Request):
     blocked_by = admin_user.get("email", "") if admin_user else ""
     await _ip_security.block_ip(ip, reason, blocked_by)
     if _audit_log:
-        await _audit_log.log_event("ip_blocked", details=f"ip={ip} reason={reason}",
-                                   ip_address=request.client.host if request.client else "")
+        await _audit_log.log_event(
+            "ip_blocked", details=f"ip={ip} reason={reason}", ip_address=request.client.host if request.client else ""
+        )
     return JSONResponse({"ok": True, "ip": ip})
 
 
@@ -730,12 +812,14 @@ async def unblock_ip(ip: str, request: Request):
         raise HTTPException(500, "Auth not initialized")
     await _ip_security.unblock_ip(ip)
     if _audit_log:
-        await _audit_log.log_event("ip_unblocked", details=f"ip={ip}",
-                                   ip_address=request.client.host if request.client else "")
+        await _audit_log.log_event(
+            "ip_unblocked", details=f"ip={ip}", ip_address=request.client.host if request.client else ""
+        )
     return JSONResponse({"ok": True, "ip": ip})
 
 
 # ── Auth Audit Log ───────────────────────────────────────────
+
 
 @router.get("/auth-audit")
 async def get_auth_audit(event_type: str = None, limit: int = 100):
@@ -745,6 +829,7 @@ async def get_auth_audit(event_type: str = None, limit: int = 100):
 
 
 # ── Session Management ───────────────────────────────────────
+
 
 @router.get("/sessions/{user_id}")
 async def list_sessions(user_id: str):
@@ -759,6 +844,7 @@ async def revoke_session(session_id: str, request: Request):
         raise HTTPException(500, "Auth not initialized")
     await _jwt_manager.revoke_session(session_id)
     if _audit_log:
-        await _audit_log.log_event("token_revoked", details=f"session={session_id}",
-                                   ip_address=request.client.host if request.client else "")
+        await _audit_log.log_event(
+            "token_revoked", details=f"session={session_id}", ip_address=request.client.host if request.client else ""
+        )
     return JSONResponse({"ok": True, "session_id": session_id})

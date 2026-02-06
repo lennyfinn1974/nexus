@@ -26,18 +26,22 @@ class ToolExecutor:
             for tool in plugin.tools:
                 params = []
                 for pname, pdesc in tool.parameters.items():
-                    params.append(ToolParameter(
-                        name=pname,
-                        type="string",
-                        description=str(pdesc),
-                        required=True,
-                    ))
-                definitions.append(ToolDefinition(
-                    name=tool.name,
-                    plugin=plugin_name,
-                    description=tool.description,
-                    parameters=params,
-                ))
+                    params.append(
+                        ToolParameter(
+                            name=pname,
+                            type="string",
+                            description=str(pdesc),
+                            required=True,
+                        )
+                    )
+                definitions.append(
+                    ToolDefinition(
+                        name=tool.name,
+                        plugin=plugin_name,
+                        description=tool.description,
+                        parameters=params,
+                    )
+                )
 
         # Skill actions
         for skill in self.skills_engine.skills.values():
@@ -46,18 +50,22 @@ class ToolExecutor:
             for action in skill.actions:
                 params = []
                 for pname, pdesc in action.parameters.items():
-                    params.append(ToolParameter(
-                        name=pname,
-                        type="string",
-                        description=str(pdesc),
-                        required=True,
-                    ))
-                definitions.append(ToolDefinition(
-                    name=action.name,
-                    plugin=f"skill_{skill.id}",
-                    description=action.description,
-                    parameters=params,
-                ))
+                    params.append(
+                        ToolParameter(
+                            name=pname,
+                            type="string",
+                            description=str(pdesc),
+                            required=True,
+                        )
+                    )
+                definitions.append(
+                    ToolDefinition(
+                        name=action.name,
+                        plugin=f"skill_{skill.id}",
+                        description=action.description,
+                        parameters=params,
+                    )
+                )
 
         return definitions
 
@@ -76,9 +84,7 @@ class ToolExecutor:
         # Skill actions
         if tool_call.plugin.startswith("skill_"):
             try:
-                result = await self.skills_engine.execute_action(
-                    tool_call.name, tool_call.parameters
-                )
+                result = await self.skills_engine.execute_action(tool_call.name, tool_call.parameters)
                 return ToolResult(
                     tool_call_id=tool_call.id,
                     name=tool_call.name,
@@ -105,9 +111,7 @@ class ToolExecutor:
             )
 
         # Security hook
-        allowed = await self.plugin_manager.validate_tool_call(
-            plugin, tool_call.name, tool_call.parameters
-        )
+        allowed = await self.plugin_manager.validate_tool_call(plugin, tool_call.name, tool_call.parameters)
         if not allowed:
             return ToolResult(
                 tool_call_id=tool_call.id,
@@ -128,9 +132,7 @@ class ToolExecutor:
 
         try:
             result = await tool_info.handler(tool_call.parameters)
-            await self.plugin_manager.audit_tool_call(
-                plugin, tool_call.name, tool_call.parameters, result
-            )
+            await self.plugin_manager.audit_tool_call(plugin, tool_call.name, tool_call.parameters, result)
             return ToolResult(
                 tool_call_id=tool_call.id,
                 name=tool_call.name,
@@ -184,6 +186,7 @@ class ToolExecutor:
             name = full_name
 
         import json
+
         args = func.get("arguments", "{}")
         if isinstance(args, str):
             try:
@@ -202,20 +205,24 @@ class ToolExecutor:
         """Format tool results as Anthropic tool_result content blocks."""
         blocks = []
         for r in results:
-            blocks.append({
-                "type": "tool_result",
-                "tool_use_id": r.tool_call_id,
-                "content": r.result if r.success else f"Error: {r.error}",
-            })
+            blocks.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": r.tool_call_id,
+                    "content": r.result if r.success else f"Error: {r.error}",
+                }
+            )
         return blocks
 
     def format_results_for_ollama(self, results: list[ToolResult]) -> list[dict]:
         """Format tool results as Ollama/OpenAI tool messages."""
         messages = []
         for r in results:
-            messages.append({
-                "role": "tool",
-                "content": r.result if r.success else f"Error: {r.error}",
-                "tool_call_id": r.tool_call_id,
-            })
+            messages.append(
+                {
+                    "role": "tool",
+                    "content": r.result if r.success else f"Error: {r.error}",
+                    "tool_call_id": r.tool_call_id,
+                }
+            )
         return messages

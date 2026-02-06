@@ -24,8 +24,8 @@ from plugins.base import NexusPlugin
 logger = logging.getLogger("nexus.plugins.agent")
 
 # Safety: limit code execution
-MAX_EXEC_TIME = 30          # seconds
-MAX_OUTPUT_SIZE = 10_000    # chars
+MAX_EXEC_TIME = 30  # seconds
+MAX_OUTPUT_SIZE = 10_000  # chars
 NEXUS_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -94,13 +94,21 @@ class AgentToolsPlugin(NexusPlugin):
         self.add_tool(
             "install_skill_from_github",
             "Clone a skill pack from a GitHub repo and install it. The repo should have a skill.yaml in its root or in a subdirectory.",
-            {"repo": "GitHub repo in owner/name format", "path": "Optional: subdirectory within repo containing skill.yaml"},
+            {
+                "repo": "GitHub repo in owner/name format",
+                "path": "Optional: subdirectory within repo containing skill.yaml",
+            },
             self._install_from_github,
         )
         self.add_tool(
             "create_skill",
             "Create a new skill pack by writing skill.yaml, knowledge.md, and optionally actions.py. Use when you've learned something and want to persist it.",
-            {"id": "Skill ID (lowercase, hyphens ok)", "yaml_content": "Content for skill.yaml", "knowledge_content": "Content for knowledge.md", "actions_content": "Optional: content for actions.py"},
+            {
+                "id": "Skill ID (lowercase, hyphens ok)",
+                "yaml_content": "Content for skill.yaml",
+                "knowledge_content": "Content for knowledge.md",
+                "actions_content": "Optional: content for actions.py",
+            },
             self._create_skill_pack,
         )
         self.add_tool(
@@ -112,7 +120,9 @@ class AgentToolsPlugin(NexusPlugin):
 
     def register_commands(self):
         self.add_command("exec", "Execute code: /exec python <code> or /exec bash <command>", self._handle_exec)
-        self.add_command("install-skill", "Install skill from GitHub: /install-skill owner/repo [path]", self._handle_install)
+        self.add_command(
+            "install-skill", "Install skill from GitHub: /install-skill owner/repo [path]", self._handle_install
+        )
 
     # ────────────────────────────────────────────
     # Code Execution
@@ -124,24 +134,21 @@ class AgentToolsPlugin(NexusPlugin):
             return "Error: No code provided."
 
         # Write to temp file and execute
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".py", dir=self.workspace, delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", dir=self.workspace, delete=False) as f:
             f.write(code)
             script_path = f.name
 
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, script_path,
+                sys.executable,
+                script_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.workspace,
                 env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
             )
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(), timeout=MAX_EXEC_TIME
-                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=MAX_EXEC_TIME)
             except asyncio.TimeoutError:
                 proc.kill()
                 return f"⏱ Execution timed out after {MAX_EXEC_TIME}s"
@@ -183,9 +190,7 @@ class AgentToolsPlugin(NexusPlugin):
                 cwd=self.workspace,
             )
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(), timeout=MAX_EXEC_TIME
-                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=MAX_EXEC_TIME)
             except asyncio.TimeoutError:
                 proc.kill()
                 return f"⏱ Timed out after {MAX_EXEC_TIME}s"
@@ -215,8 +220,7 @@ class AgentToolsPlugin(NexusPlugin):
             p = os.path.join(self.nexus_root, p)
         p = os.path.realpath(p)
         # Allow access to nexus root and workspace
-        if not (p.startswith(os.path.realpath(self.nexus_root)) or
-                p.startswith(os.path.realpath(self.workspace))):
+        if not (p.startswith(os.path.realpath(self.nexus_root)) or p.startswith(os.path.realpath(self.workspace))):
             raise PermissionError("Access denied: path is outside Nexus root")
         return p
 
@@ -267,8 +271,7 @@ class AgentToolsPlugin(NexusPlugin):
                     continue
                 fp = os.path.join(full, entry)
                 if os.path.isdir(fp):
-                    count = len([f for f in os.listdir(fp)
-                                 if not f.startswith(".")])
+                    count = len([f for f in os.listdir(fp) if not f.startswith(".")])
                     lines.append(f"  📁 {entry}/ ({count} items)")
                 else:
                     size = os.path.getsize(fp)
@@ -364,7 +367,8 @@ class AgentToolsPlugin(NexusPlugin):
         # Check if git is available
         try:
             proc = await asyncio.create_subprocess_exec(
-                "git", "--version",
+                "git",
+                "--version",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -385,13 +389,16 @@ class AgentToolsPlugin(NexusPlugin):
         tmp_dir = tempfile.mkdtemp(prefix="nexus-skill-")
         try:
             proc = await asyncio.create_subprocess_exec(
-                "git", "clone", "--depth", "1", clone_url, tmp_dir,
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                clone_url,
+                tmp_dir,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=60
-            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
             if proc.returncode != 0:
                 err = stderr.decode(errors="replace")
                 return f"Git clone failed: {err[:500]}"
@@ -410,9 +417,7 @@ class AgentToolsPlugin(NexusPlugin):
             installed = []
             for item in os.listdir(search_dir):
                 item_path = os.path.join(search_dir, item)
-                if os.path.isdir(item_path) and os.path.exists(
-                    os.path.join(item_path, "skill.yaml")
-                ):
+                if os.path.isdir(item_path) and os.path.exists(os.path.join(item_path, "skill.yaml")):
                     result = await self._install_pack_from_dir(item_path, repo)
                     installed.append(result)
 
@@ -431,6 +436,7 @@ class AgentToolsPlugin(NexusPlugin):
         """Install a single skill pack from a directory."""
         try:
             import yaml
+
             with open(os.path.join(source_dir, "skill.yaml")) as f:
                 manifest = yaml.safe_load(f) or {}
 
@@ -494,6 +500,7 @@ class AgentToolsPlugin(NexusPlugin):
             if os.path.exists(manifest_path):
                 try:
                     import yaml
+
                     with open(manifest_path) as f:
                         m = yaml.safe_load(f) or {}
                     stype = m.get("type", "knowledge")

@@ -49,20 +49,21 @@ class WebSocketManager:
         self.connections[ws_id] = websocket
 
         # Start heartbeat task
-        self.heartbeat_tasks[ws_id] = asyncio.create_task(
-            self._heartbeat_loop(ws_id)
-        )
+        self.heartbeat_tasks[ws_id] = asyncio.create_task(self._heartbeat_loop(ws_id))
 
         # Send queued messages if any
         await self._send_queued_messages(ws_id)
 
         # Send session info
-        await self._send_message(ws_id, {
-            "type": "session_info",
-            "session_id": ws_id,
-            "reconnected": session_id is not None,
-            "queue_size": len(self.message_queues[ws_id])
-        })
+        await self._send_message(
+            ws_id,
+            {
+                "type": "session_info",
+                "session_id": ws_id,
+                "reconnected": session_id is not None,
+                "queue_size": len(self.message_queues[ws_id]),
+            },
+        )
 
         return ws_id
 
@@ -89,10 +90,7 @@ class WebSocketManager:
             await self._send_message(ws_id, message)
         else:
             # Client is offline, queue the message
-            self.message_queues[ws_id].append({
-                "timestamp": time.time(),
-                "message": message
-            })
+            self.message_queues[ws_id].append({"timestamp": time.time(), "message": message})
             logger.debug(f"Message queued for {ws_id}: {message['type']}")
 
     async def broadcast(self, message: dict, exclude: Optional[list[str]] = None):
@@ -146,10 +144,7 @@ class WebSocketManager:
                 await asyncio.sleep(self.heartbeat_interval)
 
                 # Send ping
-                await self._send_message(ws_id, {
-                    "type": "ping",
-                    "timestamp": time.time()
-                })
+                await self._send_message(ws_id, {"type": "ping", "timestamp": time.time()})
 
                 # Wait for pong (client should respond within 10 seconds)
                 # For now, we'll just continue - a more sophisticated implementation

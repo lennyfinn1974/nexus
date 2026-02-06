@@ -14,6 +14,7 @@ class ChatMessage(BaseModel):
 
 class WebSocketIncoming(BaseModel):
     """Incoming WebSocket message from client."""
+
     type: str = "text"
     text: str | None = None
     conv_id: str | None = None
@@ -21,11 +22,18 @@ class WebSocketIncoming(BaseModel):
 
 class StreamEvent(BaseModel):
     """Server-sent streaming event via WebSocket."""
+
     type: Literal[
-        "stream_start", "stream_chunk", "stream_end",
-        "message", "system", "error",
-        "conversation_set", "conversation_renamed",
-        "session_info", "ping",
+        "stream_start",
+        "stream_chunk",
+        "stream_end",
+        "message",
+        "system",
+        "error",
+        "conversation_set",
+        "conversation_renamed",
+        "session_info",
+        "ping",
     ]
     content: str | None = None
     model: str | None = None

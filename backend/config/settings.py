@@ -2,6 +2,7 @@
 All environment variables are optional -- defaults are provided for a local dev setup.
 The Settings object is instantiated once at startup and injected wherever needed.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,7 +18,9 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = Field("postgresql+asyncpg://localhost/nexus", env="DATABASE_URL")
-    db_path: Path = Field(default_factory=lambda: Path(__file__).parents[3] / "data" / "nexus.db", env="DB_PATH")  # legacy, used by migration script
+    db_path: Path = Field(
+        default_factory=lambda: Path(__file__).parents[3] / "data" / "nexus.db", env="DB_PATH"
+    )  # legacy, used by migration script
 
     # Model endpoints
     ollama_base_url: str = Field("http://localhost:11434", env="OLLAMA_BASE_URL")

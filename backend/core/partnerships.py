@@ -130,9 +130,7 @@ class PartnerRegistry:
                     )
 
             except Exception as e:
-                logger.warning(
-                    f"Message to {msg.recipient} failed (attempt {attempt + 1}/{max_retries}): {e}"
-                )
+                logger.warning(f"Message to {msg.recipient} failed (attempt {attempt + 1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(delays[attempt])
                 else:
