@@ -1,0 +1,36 @@
+# Model Configuration for Nexus
+models:
+  claude:
+    sonnet:
+      name: "claude-3-5-sonnet-20241022"
+      max_tokens: 8192
+      temperature: 0.7
+      description: "Fast, capable model for most tasks"
+    opus:
+      name: "claude-3-opus-20240229" 
+      max_tokens: 4096
+      temperature: 0.7
+      description: "Most capable model for complex reasoning and analysis"
+    haiku:
+      name: "claude-3-haiku-20240307"
+      max_tokens: 4096
+      temperature: 0.7
+      description: "Fast, lightweight model for simple tasks"
+  
+  local:
+    llama:
+      name: "llama3.2:latest"
+      base_url: "http://localhost:11434"
+      description: "Local Ollama model"
+
+# Default model selection
+default:
+  provider: "claude"
+  model: "sonnet"
+
+# Model aliases for easy switching
+aliases:
+  opus: "claude/opus"
+  sonnet: "claude/sonnet" 
+  haiku: "claude/haiku"
+  local: "local/llama"

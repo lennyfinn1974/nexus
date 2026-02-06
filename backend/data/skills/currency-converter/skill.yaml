@@ -1,0 +1,24 @@
+id: currency-converter
+name: Currency Converter
+type: integration
+version: 1.0.0
+domain: finance
+description: Convert between different currencies using real-time exchange rates
+author: nexus
+triggers:
+  keywords: [currency, convert, exchange, rate, dollar, euro, yen]
+  patterns:
+    - "convert \\d+.*to.*"
+    - "exchange rate.*"
+actions:
+  - name: convert_currency
+    description: Convert an amount from one currency to another
+    parameters:
+      amount: Amount to convert (number)
+      from_currency: Source currency code (string)
+      to_currency: Target currency code (string)
+  - name: get_exchange_rate
+    description: Get exchange rate between two currencies
+    parameters:
+      from_currency: Source currency code (string)  
+      to_currency: Target currency code (string)

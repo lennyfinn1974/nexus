@@ -1,0 +1,23 @@
+id: web-scraper
+name: Web Scraper
+type: integration  
+version: 1.0.0
+domain: data
+description: Extract data from web pages and APIs
+author: nexus
+triggers:
+  keywords: [scrape, web, html, extract, crawl, website, page]
+  patterns:
+    - "scrape.*"
+    - "get data from.*"
+    - "extract.*from.*website"
+actions:
+  - name: scrape_url
+    description: Extract text content from a web page
+    parameters:
+      url: URL to scrape (string)
+      selector: CSS selector for specific content (optional, string)
+  - name: get_page_title
+    description: Get the title of a web page  
+    parameters:
+      url: URL to get title from (string)

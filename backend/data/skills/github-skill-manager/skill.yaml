@@ -1,0 +1,9 @@
+name: Apple Notes Integration
+description: Create, read, and manage Apple Notes through AppleScript automation
+version: 1.0.0
+dependencies:
+  - subprocess
+actions:
+  - create_note
+  - list_notes
+  - search_notes

@@ -1,0 +1,32 @@
+# Nexus Configuration
+version: 1.0.0
+
+# Plugin Configuration  
+plugins:
+  agent:
+    enabled: true
+  github:
+    enabled: true
+    token: YOUR_GITHUB_TOKEN_HERE  # Replace with your actual token
+
+# Model Configuration
+models:
+  default: claude
+  fallback: local
+  
+# Skill Configuration
+skills:
+  auto_load: true
+  search_paths:
+    - data/skills
+    - skills
+
+# API Configuration
+api:
+  host: localhost
+  port: 8000
+  
+# Logging
+logging:
+  level: INFO
+  file: logs/nexus.log

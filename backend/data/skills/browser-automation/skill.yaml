@@ -1,0 +1,19 @@
+name: Browser Automation
+description: Control Brave or Chrome browser programmatically without keyboard input
+version: 1.0.0
+dependencies:
+  - selenium
+  - webdriver-manager
+  - requests
+actions:
+  - launch_browser
+  - navigate_to_url
+  - click_element
+  - fill_form_field
+  - scroll_page
+  - take_screenshot
+  - get_page_content
+  - find_elements
+  - close_browser
+  - switch_tab
+  - execute_javascript

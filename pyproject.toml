@@ -1,0 +1,76 @@
+[project]
+name = "nexus"
+version = "2.0.0"
+description = "Personal AI Agent Platform"
+requires-python = ">=3.9"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--strict-markers",
+    "--tb=short",
+    "-v",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: integration tests requiring full app context",
+    "security: security-focused tests",
+    "benchmark: performance benchmark tests",
+]
+
+[tool.coverage.run]
+source = ["backend"]
+omit = [
+    "backend/test_*.py",
+    "backend/logs/*",
+    "backend/data/*",
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.",
+    "if TYPE_CHECKING:",
+    "pass",
+]
+
+[tool.black]
+line-length = 120
+target-version = ["py39"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "S",    # flake8-bandit
+    "UP",   # pyupgrade
+]
+ignore = [
+    "S101",  # assert used (fine in tests)
+    "S104",  # possible binding to all interfaces
+    "S105",  # hardcoded password (test fixtures)
+    "S106",  # hardcoded password (test fixtures)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+check_untyped_defs = true
