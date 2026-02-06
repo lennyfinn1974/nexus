@@ -19,7 +19,7 @@ mypy==1.13.0
 bandit==1.8.0
 
 # Pre-commit
-pre-commit==4.0.1
+pre-commit==4.3.0
 
 # Performance testing
 locust==2.32.3
