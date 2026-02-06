@@ -10,14 +10,6 @@
     <link rel="stylesheet" crossorigin href="/admin/assets/index-BtGRJh0J.css">
   </head>
   <body>
-    <div id="root"><p style="color:white;padding:2em;">Loading...</p></div>
-    <script>
-      window.addEventListener('error', function(e) {
-        document.getElementById('root').innerHTML = '<pre style="color:red;padding:2em;">ERROR: ' + e.message + '\n' + (e.filename||'') + ':' + (e.lineno||'') + '</pre>';
-      });
-      window.addEventListener('unhandledrejection', function(e) {
-        document.getElementById('root').innerHTML = '<pre style="color:red;padding:2em;">PROMISE ERROR: ' + (e.reason?.message || e.reason || 'unknown') + '\n' + (e.reason?.stack || '') + '</pre>';
-      });
-    </script>
+    <div id="root"></div>
   </body>
 </html>
