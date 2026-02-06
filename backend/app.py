@@ -239,7 +239,7 @@ async def lifespan(app: FastAPI):
         state.partner_registry = None
 
     # CORS origins
-    _allowed_origins_raw = os.getenv("ALLOWED_ORIGINS", "http://localhost:8080")
+    _allowed_origins_raw = os.getenv("ALLOWED_ORIGINS", "http://localhost:8081,http://127.0.0.1:8081")
     state.allowed_origins = [o.strip() for o in _allowed_origins_raw.split(",") if o.strip()]
 
     # Admin API
@@ -322,7 +322,7 @@ def create_app() -> FastAPI:
 
     # Middleware (order: outermost first in add_middleware calls,
     # but Starlette processes them in reverse — last added is outermost)
-    _allowed_origins_raw = os.getenv("ALLOWED_ORIGINS", "http://localhost:8080")
+    _allowed_origins_raw = os.getenv("ALLOWED_ORIGINS", "http://localhost:8081,http://127.0.0.1:8081")
     allowed_origins = [o.strip() for o in _allowed_origins_raw.split(",") if o.strip()]
 
     app.add_middleware(AuthMiddleware)

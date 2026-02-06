@@ -1,4 +1,5 @@
 """Auth enforcement middleware — HTTP + WebSocket."""
+from __future__ import annotations
 
 import logging
 from fastapi import Request, WebSocket

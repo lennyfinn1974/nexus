@@ -1,4 +1,5 @@
 """Google OAuth 2.0 — authorization code flow with CSRF state protection."""
+from __future__ import annotations
 
 import hashlib
 import logging

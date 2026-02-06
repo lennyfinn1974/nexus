@@ -1,8 +1,12 @@
-# Nexus - Python Dependencies (Python 3.9+ compatible)
+# Nexus - Python Dependencies (Python 3.10+)
 
 # Core framework
 fastapi==0.103.2
 uvicorn[standard]==0.24.0
+
+# Pydantic v2 (schemas, settings)
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
 
 # Anthropic SDK
 anthropic==0.39.0
@@ -33,3 +37,6 @@ tiktoken>=0.7.0
 
 # JWT authentication
 PyJWT>=2.8.0
+
+# System monitoring (health checks)
+psutil>=5.9.0

@@ -1,4 +1,8 @@
+import logging
+
 from .base import BasePlugin
+
+logger = logging.getLogger("nexus.plugins.github")
 
 class GithubPlugin(BasePlugin):
     name = "github"
@@ -7,12 +11,11 @@ class GithubPlugin(BasePlugin):
     commands = [{"name": "issue", "description": "Create a GitHub issue"}]
 
     async def init(self):
-        self.logger = logger.bind(plugin=self.name)
-        self.logger.info("GitHub plugin ready")
+        logger.info("GitHub plugin ready")
 
     async def run(self, repo: str, title: str, body: str):
         # Existing logic …
         ...
 
     async def shutdown(self):
-        self.logger.info("GitHub plugin stopped")
+        logger.info("GitHub plugin stopped")

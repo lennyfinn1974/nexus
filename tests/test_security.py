@@ -1,4 +1,4 @@
-"""Security tests — auth bypass, SSRF, path traversal, injection."""
+"""Security tests -- auth bypass, SSRF, path traversal, injection."""
 
 import os
 import pytest
@@ -61,48 +61,35 @@ class TestPathTraversal:
     @pytest.mark.security
     async def test_path_traversal_blocked(self):
         """validate_path should block directory traversal."""
-        import sys
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
-        from main import validate_path
+        from core.security import validate_path, init_allowed_dirs
+        from core.exceptions import PathAccessDeniedError
 
-        with pytest.raises(ValueError, match="Path outside allowed directories"):
+        init_allowed_dirs("/tmp/test-nexus")
+        with pytest.raises(PathAccessDeniedError):
             validate_path("/etc/passwd")
 
     @pytest.mark.security
     async def test_path_traversal_dotdot(self, tmp_base_dir):
         """Dot-dot traversal should be caught."""
-        import sys
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
-        import main as main_module
+        from core.security import validate_path, init_allowed_dirs
+        from core.exceptions import PathAccessDeniedError
 
-        # Temporarily set ALLOWED_DIRS for testing
-        original = main_module.ALLOWED_DIRS
-        main_module.ALLOWED_DIRS = [str(tmp_base_dir / "data")]
-        try:
-            with pytest.raises(ValueError):
-                main_module.validate_path(str(tmp_base_dir / "data" / ".." / ".." / "etc" / "passwd"))
-        finally:
-            main_module.ALLOWED_DIRS = original
+        init_allowed_dirs(str(tmp_base_dir))
+        with pytest.raises(PathAccessDeniedError):
+            validate_path(str(tmp_base_dir / "data" / ".." / ".." / "etc" / "passwd"))
 
     @pytest.mark.security
     async def test_valid_path_allowed(self, tmp_base_dir):
         """Paths inside ALLOWED_DIRS should work."""
-        import sys
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
-        import main as main_module
+        from core.security import validate_path, init_allowed_dirs
 
-        original = main_module.ALLOWED_DIRS
+        init_allowed_dirs(str(tmp_base_dir))
         data_dir = str(tmp_base_dir / "data")
-        main_module.ALLOWED_DIRS = [data_dir]
-        try:
-            # Create a test file
-            test_file = os.path.join(data_dir, "test.txt")
-            with open(test_file, "w") as f:
-                f.write("test")
-            result = main_module.validate_path(test_file)
-            assert result == os.path.realpath(test_file)
-        finally:
-            main_module.ALLOWED_DIRS = original
+        test_file = os.path.join(data_dir, "test.txt")
+        with open(test_file, "w") as f:
+            f.write("test")
+        result = validate_path(test_file)
+        assert result == os.path.realpath(test_file)
 
 
 class TestSSRFProtection:
@@ -153,7 +140,7 @@ class TestInputValidation:
         await test_db.create_conversation("conv-sec-rename", title="Original")
         resp = await client.put(
             "/api/conversations/conv-sec-rename",
-            json={"title": ""},
+            json={"title": "  "},
         )
         assert resp.status_code == 400
 
@@ -176,5 +163,4 @@ class TestInputValidation:
         )
         assert resp.status_code == 200
         data = resp.json()
-        # The masked value (containing '...') should NOT have been saved
         assert data["count"] == 0

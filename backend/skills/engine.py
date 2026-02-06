@@ -19,6 +19,7 @@ Folder layout::
         knowledge.md        # Context injected into prompts
         actions.py          # Optional: executable action handlers
 """
+from __future__ import annotations
 
 import os
 import re

@@ -1,4 +1,8 @@
+import logging
+
 from .base import BasePlugin
+
+logger = logging.getLogger("nexus.plugins.browser")
 
 class BrowserPlugin(BasePlugin):
     name = "browser"
@@ -7,12 +11,11 @@ class BrowserPlugin(BasePlugin):
     commands = [{"name": "open", "description": "Open a URL in the browser"}]
 
     async def init(self):
-        self.logger = logger.bind(plugin=self.name)
-        self.logger.info("Browser plugin initialised")
+        logger.info("Browser plugin initialised")
 
     async def run(self, url: str):
         # Existing implementation moved here …
         ...
 
     async def shutdown(self):
-        self.logger.info("Browser plugin shutting down")
+        logger.info("Browser plugin shutting down")

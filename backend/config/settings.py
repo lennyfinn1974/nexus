@@ -2,6 +2,7 @@
 All environment variables are optional -- defaults are provided for a local dev setup.
 The Settings object is instantiated once at startup and injected wherever needed.
 """
+from __future__ import annotations
 
 from pathlib import Path
 from pydantic import Field, field_validator

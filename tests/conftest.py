@@ -3,8 +3,6 @@
 import asyncio
 import os
 import sys
-from dataclasses import dataclass, field
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,6 +10,14 @@ import pytest_asyncio
 
 # Ensure backend is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
+
+# Register JSONB → JSON fallback for SQLite test dialect
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.compiler import compiles
+
+@compiles(JSONB, "sqlite")
+def _compile_jsonb_sqlite(type_, compiler, **kw):
+    return "JSON"
 
 
 # ── Event Loop ──
@@ -44,42 +50,64 @@ def tmp_base_dir(tmp_path):
     return tmp_path
 
 
-@pytest.fixture
-def tmp_db_path(tmp_base_dir):
-    """Path for a temporary test database."""
-    return str(tmp_base_dir / "data" / "nexus_test.db")
+# ── SQLAlchemy async engine + session factory (SQLite for tests) ──
+
+
+@pytest_asyncio.fixture
+async def session_factory(tmp_path):
+    """Create an async SQLAlchemy session factory backed by SQLite."""
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from storage.models import Base
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'test.db'}"
+    engine = create_async_engine(db_url, echo=False)
+
+    # Create all tables (skip JSONB columns — SQLite doesn't support them,
+    # but SQLAlchemy falls back to JSON which works for testing)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    yield factory
+
+    await engine.dispose()
 
 
 # ── Database Fixture ──
 
 
 @pytest_asyncio.fixture
-async def test_db(tmp_db_path):
-    """Create a fresh test database."""
+async def test_db(session_factory):
+    """Create a Database instance backed by test SQLite."""
     from storage.database import Database
 
-    db = Database(tmp_db_path)
-    await db.connect()
+    db = Database(session_factory)
     yield db
-    await db.close()
 
 
 # ── ConfigManager Fixture ──
 
 
 @pytest_asyncio.fixture
-async def test_config(tmp_db_path, tmp_base_dir):
+async def test_config(session_factory, tmp_base_dir):
     """Create a test ConfigManager with defaults seeded."""
+    import config_manager as cm_module
     from config_manager import ConfigManager
     from storage.encryption import init as init_encryption
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
     init_encryption(str(tmp_base_dir))
 
-    cfg = ConfigManager(tmp_db_path, str(tmp_base_dir))
-    await cfg.connect()
+    # Patch PostgreSQL-specific insert with SQLite-compatible insert
+    original_pg_insert = cm_module.pg_insert
+    cm_module.pg_insert = sqlite_insert
+
+    cfg = ConfigManager(session_factory, str(tmp_base_dir))
+    await cfg.initialize()
     await cfg.seed_defaults()
     yield cfg
-    await cfg.close()
+
+    cm_module.pg_insert = original_pg_insert
 
 
 # ── Mock Model Clients ──
@@ -98,7 +126,7 @@ def mock_ollama_client():
         "tokens_out": 20,
     })
 
-    async def mock_stream(messages, system=None):
+    async def mock_stream(messages, system=None, **kwargs):
         for chunk in ["Mock ", "streamed ", "response"]:
             yield chunk
 
@@ -119,7 +147,7 @@ def mock_claude_client():
         "tokens_out": 25,
     })
 
-    async def mock_stream(messages, system=None):
+    async def mock_stream(messages, system=None, **kwargs):
         for chunk in ["Mock ", "Claude ", "stream"]:
             yield chunk
 
@@ -203,7 +231,7 @@ def mock_task_queue():
 
 @pytest_asyncio.fixture
 async def test_app(
-    tmp_base_dir, tmp_db_path, test_db, test_config,
+    tmp_base_dir, test_db, test_config,
     mock_model_router, mock_plugin_manager, mock_skills_engine, mock_task_queue,
 ):
     """Create a FastAPI app with mocked state, bypassing lifespan."""
@@ -228,7 +256,7 @@ async def test_app(
         # Initialize allowed dirs for path validation
         init_allowed_dirs(str(tmp_base_dir))
 
-        # Build the app without lifespan (no .nexus_secret needed)
+        # Build the app without lifespan
         app = FastAPI(title="Nexus Test")
 
         # Initialize frontend router
@@ -240,7 +268,7 @@ async def test_app(
 
         register_exception_handlers(app)
 
-        # Middleware with generous rate limits for testing
+        # Middleware with generous rate limits
         app.add_middleware(AuthMiddleware)
         app.add_middleware(RateLimitMiddleware, general_limit=10000, admin_limit=10000, auth_limit=10000)
         app.add_middleware(AuditMiddleware)
@@ -272,10 +300,34 @@ async def test_app(
         )
         app.state.nexus = state
 
+        # Mock auth components for admin
+        mock_user_manager = MagicMock()
+        mock_user_manager.list_users = AsyncMock(return_value=[])
+        mock_user_manager.list_whitelist = AsyncMock(return_value=[])
+        mock_user_manager.update_user_role = AsyncMock(return_value=True)
+        mock_user_manager.deactivate_user = AsyncMock()
+        mock_user_manager.activate_user = AsyncMock()
+        mock_user_manager.add_to_whitelist = AsyncMock(return_value=True)
+        mock_user_manager.remove_from_whitelist = AsyncMock()
+        mock_ip_security = MagicMock()
+        mock_ip_security.list_blocked_ips = AsyncMock(return_value=[])
+        mock_ip_security.block_ip = AsyncMock()
+        mock_ip_security.unblock_ip = AsyncMock()
+        mock_audit_log = MagicMock()
+        mock_audit_log.get_recent_events = AsyncMock(return_value=[])
+        mock_audit_log.log_event = AsyncMock()
+        mock_jwt = MagicMock()
+        mock_jwt.list_user_sessions = AsyncMock(return_value=[])
+        mock_jwt.revoke_session = AsyncMock()
+        mock_jwt.revoke_all_user_sessions = AsyncMock()
+        mock_jwt.verify_access_token = MagicMock(return_value=None)
+
         # Initialize admin module
         admin_init(
             test_config, mock_plugin_manager, mock_model_router,
             test_db, mock_task_queue, mock_skills_engine,
+            jwt_manager=mock_jwt, user_manager=mock_user_manager,
+            ip_security=mock_ip_security, audit_log=mock_audit_log,
         )
 
         yield app

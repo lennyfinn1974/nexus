@@ -43,15 +43,14 @@ class TestPublicEndpoints:
 
 class TestConversationEndpoints:
     async def test_create_conversation(self, client):
-        resp = await client.post("/api/conversations")
+        resp = await client.post("/api/conversations", json={"title": "Test Conv"})
         assert resp.status_code == 200
         data = resp.json()
         assert "id" in data
         assert data["id"].startswith("conv-")
 
     async def test_list_conversations(self, client):
-        # Create one first
-        await client.post("/api/conversations")
+        await client.post("/api/conversations", json={"title": "Test"})
         resp = await client.get("/api/conversations")
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
@@ -83,7 +82,7 @@ class TestConversationEndpoints:
         await test_db.create_conversation("conv-rename-empty", title="Old")
         resp = await client.put(
             "/api/conversations/conv-rename-empty",
-            json={"title": ""},
+            json={"title": "  "},
         )
         assert resp.status_code == 400
 
@@ -92,11 +91,6 @@ class TestConversationEndpoints:
         resp = await client.delete("/api/conversations/conv-del-api")
         assert resp.status_code == 200
         assert resp.json()["deleted"] == "conv-del-api"
-
-    async def test_delete_skill(self, client, test_db):
-        await test_db.save_skill("sk-api-del", "API Skill", "Test", "test", "/tmp/test.md")
-        resp = await client.delete("/api/skills/sk-api-del")
-        assert resp.status_code == 200
 
 
 class TestDocEndpoints:

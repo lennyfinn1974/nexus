@@ -12,6 +12,7 @@ Usage:
     DATABASE_URL=postgresql+asyncpg://... \
     python -m scripts.migrate_sqlite_to_pg [--sqlite-path data/nexus.db] [--batch-size 500]
 """
+from __future__ import annotations
 
 import argparse
 import asyncio

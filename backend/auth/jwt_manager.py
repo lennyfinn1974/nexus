@@ -1,4 +1,5 @@
 """JWT token lifecycle — access tokens, refresh tokens, session management."""
+from __future__ import annotations
 
 import hashlib
 import logging
