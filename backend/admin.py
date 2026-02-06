@@ -280,7 +280,7 @@ async def test_setting(key: str):
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
                     "https://api.github.com/user",
-                    headers={"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"},
+                    headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
                 )
                 if resp.status_code == 200:
                     user = resp.json().get("login", "unknown")

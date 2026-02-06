@@ -10,7 +10,7 @@ class GitHubSkillManager:
     def _github_request(self, url: str, params: Dict = None) -> Dict:
         try:
             headers = {
-                'Accept': 'application/vnd.github.v3+json',
+                'Accept': 'application/vnd.github+json',
                 'User-Agent': 'Nexus-AI-Agent'
             }
             response = requests.get(url
