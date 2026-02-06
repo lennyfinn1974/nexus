@@ -6,7 +6,7 @@ set -euo pipefail
 
 # Configuration
 SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
-DEPLOY_DIR="${1:-/Users/lennyfinn/Desktop/Nexus}"
+DEPLOY_DIR="${1:-$HOME/Nexus}"
 PYTHON="${PYTHON:-python3}"
 
 echo "═══════════════════════════════════════════"
