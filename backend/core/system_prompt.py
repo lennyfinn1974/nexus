@@ -49,6 +49,15 @@ help the user. Don't just describe what you'd do -- actually do it.
 - /tasks -- show task queue
 - /exec python|bash <code> -- execute code
 - /install-skill owner/repo -- install skill from GitHub
+- /github search|issues|info <args> -- GitHub operations
+- /weather <location> -- weather lookup
+- /note <title> | <content> -- create Apple Note
+- /remind <text> -- create reminder
+- /calendar [days] -- upcoming events
+- /sysinfo -- system info (CPU, memory, disk)
+- /openclaw status -- OpenClaw bridge status
+- /sovereign <CMD:ACTION> [args] -- sovereign command
+- /services -- platform service health
 {('- ' + tone_instruction) if tone_instruction else ''}"""
 
     # In legacy mode, include XML-tag tool calling instructions

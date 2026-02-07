@@ -81,6 +81,9 @@ class AppState:
     user_manager: UserManager = None
     ip_security: IPSecurity = None
     audit_log: AuthAuditLog = None
+    openclaw_bridge: Any = None
+    sovereign_client: Any = None
+    service_monitor: Any = None
     allowed_origins: list = field(default_factory=list)
     base_dir: str = ""
 
@@ -288,6 +291,55 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Telegram failed to start: {e}")
 
+    # OpenClaw Bridge (optional)
+    if os.getenv("OPENCLAW_ENABLED", "").lower() in ("1", "true", "yes"):
+        try:
+            from integrations.openclaw_bridge import BridgeConfig, OpenClawBridge
+
+            bridge_cfg = BridgeConfig(
+                gateway_url=os.getenv("OPENCLAW_GATEWAY_URL", ""),
+                auth_token=os.getenv("OPENCLAW_AUTH_TOKEN", ""),
+                enabled=True,
+            )
+            state.openclaw_bridge = OpenClawBridge(bridge_cfg)
+            state.openclaw_bridge.set_plugin_manager(state.plugin_manager)
+            await state.openclaw_bridge.start()
+            logger.info("OpenClaw bridge started")
+        except Exception as e:
+            logger.warning(f"OpenClaw bridge failed to start: {e}")
+
+    # Sovereign-core client (optional)
+    sovereign_url = os.getenv("SOVEREIGN_CORE_URL", "")
+    if sovereign_url:
+        try:
+            from integrations.sovereign_client import SovereignClient
+
+            state.sovereign_client = SovereignClient(sovereign_url)
+            await state.sovereign_client.connect()
+            if state.sovereign_client.is_available:
+                logger.info(f"Sovereign-core client connected: {sovereign_url}")
+            else:
+                logger.info("Sovereign-core client created but service unavailable")
+        except Exception as e:
+            logger.warning(f"Sovereign-core client failed: {e}")
+
+    # Service health monitor (optional)
+    try:
+        from services.monitor import ServiceMonitor
+
+        state.service_monitor = ServiceMonitor()
+        await state.service_monitor.start()
+        logger.info("Service health monitor started")
+    except Exception as e:
+        logger.warning(f"Service monitor failed to start: {e}")
+
+    # Wire integration refs into the openclaw plugin (if loaded)
+    oc_plugin = state.plugin_manager.plugins.get("openclaw") if state.plugin_manager else None
+    if oc_plugin:
+        oc_plugin._bridge_ref = state.openclaw_bridge
+        oc_plugin._sovereign_ref = state.sovereign_client
+        oc_plugin._monitor_ref = state.service_monitor
+
     # Expose state on the app
     app.state.nexus = state
 
@@ -296,6 +348,12 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ──
     logger.info("Shutting down...")
+    if state.service_monitor:
+        await state.service_monitor.stop()
+    if state.openclaw_bridge:
+        await state.openclaw_bridge.stop()
+    if state.sovereign_client:
+        await state.sovereign_client.close()
     if state.plugin_manager:
         await state.plugin_manager.shutdown_all()
     if state.telegram_channel:

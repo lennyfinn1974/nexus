@@ -1,0 +1,29 @@
+id: apple-notes
+name: Apple Notes
+type: integration
+version: 1.0.0
+domain: productivity
+description: Create, list, and search Apple Notes via AppleScript
+author: nexus
+triggers:
+  keywords: [note, notes, apple notes, write note, create note]
+  patterns:
+    - "create (a )?note.*"
+    - "(list|show) (my )?notes.*"
+    - "search notes.*"
+actions:
+  - name: create_note
+    description: Create a new note in Apple Notes
+    parameters:
+      title: Note title
+      content: Note body text
+      folder: Folder name (default Notes)
+  - name: list_notes
+    description: List recent notes from Apple Notes
+    parameters:
+      folder: Folder to list from (default Notes)
+      limit: Max notes to return (default 10)
+  - name: search_notes
+    description: Search notes by keyword
+    parameters:
+      query: Search text

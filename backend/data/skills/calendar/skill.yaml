@@ -1,0 +1,29 @@
+id: calendar
+name: Apple Calendar
+type: integration
+version: 1.0.0
+domain: productivity
+description: View and create events in Apple Calendar
+author: nexus
+triggers:
+  keywords: [calendar, event, meeting, appointment, schedule]
+  patterns:
+    - "(list|show) (my )?(calendar|events).*"
+    - "create (an? )?(event|meeting|appointment).*"
+    - "schedule (a )?.*"
+    - "what('s| is) on my calendar.*"
+actions:
+  - name: list_events
+    description: List upcoming calendar events
+    parameters:
+      days: Number of days to look ahead (default 7)
+  - name: create_event
+    description: Create a new calendar event
+    parameters:
+      title: Event title
+      start_date: Start date and time (e.g. 2026-02-10 14:00)
+      end_date: End date and time (e.g. 2026-02-10 15:00)
+      calendar: Calendar name (optional)
+  - name: list_calendars
+    description: List available calendars
+    parameters: {}

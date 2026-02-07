@@ -45,10 +45,3 @@ def get_exchange_rate(params: Dict) -> str:
         
     except Exception as e:
         return f"Error: {str(e)}"
-"""
-)
-</tool_call>
-
-Now let me check if the skill was created properly:
-
-<tool_call>agent:list_dir(path="data/skills

@@ -1,0 +1,32 @@
+id: file-search
+name: File Search
+type: integration
+version: 1.0.0
+domain: system
+description: Search for files using Spotlight, find, and content grep
+author: nexus
+triggers:
+  keywords: [find, search, locate, file, spotlight, grep]
+  patterns:
+    - "find (files?|documents?).*"
+    - "search for .*files?.*"
+    - "locate .*"
+    - "grep .*"
+actions:
+  - name: spotlight_search
+    description: Search for files using macOS Spotlight (mdfind)
+    parameters:
+      query: Search query
+      directory: Optional directory to limit search
+  - name: find_files
+    description: Find files by name pattern
+    parameters:
+      pattern: Filename pattern (supports wildcards)
+      directory: Directory to search in (default home)
+      max_depth: Maximum directory depth (default 5)
+  - name: search_file_contents
+    description: Search for text within files
+    parameters:
+      pattern: Text or regex pattern to search for
+      directory: Directory to search in
+      file_type: File extension filter (e.g. py, txt, md)

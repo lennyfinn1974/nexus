@@ -1,0 +1,29 @@
+id: system-info
+name: System Information
+type: integration
+version: 1.0.0
+domain: system
+description: Get system info, disk usage, running processes, and network details
+author: nexus
+triggers:
+  keywords: [system, cpu, memory, disk, process, network, uptime, sysinfo]
+  patterns:
+    - "system (info|status|stats).*"
+    - "how much (disk|memory|ram).*"
+    - "(list|show) processes.*"
+    - "network (info|status).*"
+actions:
+  - name: get_system_info
+    description: Get CPU, memory, and OS information
+    parameters: {}
+  - name: get_disk_usage
+    description: Get disk usage for all mounted partitions
+    parameters: {}
+  - name: list_processes
+    description: List top processes by CPU or memory usage
+    parameters:
+      sort_by: Sort by cpu or memory (default cpu)
+      limit: Max number of processes (default 10)
+  - name: get_network_info
+    description: Get network interface information
+    parameters: {}
