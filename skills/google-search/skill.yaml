@@ -1,0 +1,40 @@
+id: google-search
+name: Google Search
+type: integration
+version: "1.0"
+domain: search
+description: Search the web using Google Custom Search API
+author: nexus
+
+config:
+  GOOGLE_API_KEY:
+    label: Google API Key
+    type: password
+    required: true
+    description: API key from Google Cloud Console (enable Custom Search JSON API)
+  GOOGLE_CSE_ID:
+    label: Search Engine ID
+    type: text
+    required: true
+    description: Custom Search Engine ID from programmablesearchengine.google.com
+
+triggers:
+  keywords:
+    - search
+    - google
+    - look up
+    - find online
+    - web search
+    - search the web
+    - search for
+  patterns:
+    - "(?:search|google|look up|find) (?:for |the web |online )?.*"
+    - "what (?:is|are) .* \\?"
+
+actions:
+  - name: google_search
+    description: Search the web using Google and return top results
+    handler: google_search
+    parameters:
+      query: Search query string
+      num_results: Number of results to return (1-10, default 5)
