@@ -137,7 +137,17 @@ class Mem0Plugin(NexusPlugin):
         limit = int(params.get("limit", 5))
 
         try:
-            results = self.client.search(query=query, user_id=self.user_id, limit=limit)
+            # Mem0 API v2 requires filters parameter
+            results = self.client.search(
+                query=query,
+                user_id=self.user_id,
+                limit=limit,
+                filters={"user_id": self.user_id}  # Required by v2 API
+            )
+
+            # Handle v1.1 format: {"results": [...]}
+            if isinstance(results, dict) and "results" in results:
+                results = results["results"]
 
             if not results or len(results) == 0:
                 return f"No memories found for: {query}"
@@ -193,7 +203,11 @@ class Mem0Plugin(NexusPlugin):
             return "❌ Mem0 plugin not available"
 
         try:
-            memories = self.client.get_all(user_id=self.user_id)
+            # Mem0 API v2 requires filters parameter
+            memories = self.client.get_all(
+                user_id=self.user_id,
+                filters={"user_id": self.user_id}  # Required by v2 API
+            )
 
             if not memories or len(memories) == 0:
                 return "No memories stored yet."
@@ -293,7 +307,19 @@ class Mem0Plugin(NexusPlugin):
         try:
             # Search for recent or general context
             # This is a simple implementation - you might want to search based on current context
-            memories = self.client.get_all(user_id=self.user_id)
+            memories = self.client.get_all(
+                user_id=self.user_id,
+                filters={"user_id": self.user_id}  # Required by v2 API
+            )
+
+            # Handle different response formats from mem0 API
+            if isinstance(memories, dict) and "results" in memories:
+                memories = memories["results"]
+
+            # Ensure memories is a list
+            if not isinstance(memories, list):
+                logger.warning(f"Unexpected memories type: {type(memories)}")
+                return ""
 
             if not memories or len(memories) == 0:
                 return ""
@@ -302,10 +328,12 @@ class Mem0Plugin(NexusPlugin):
             lines.append("You have access to these stored memories from past conversations:\n")
 
             # Show up to 10 most recent memories
-            for memory in memories[:10]:
-                text = memory.get("memory", memory.get("text", ""))
-                if text:
-                    lines.append(f"- {text}")
+            recent_memories = memories[:10] if len(memories) > 10 else memories
+            for memory in recent_memories:
+                if isinstance(memory, dict):
+                    text = memory.get("memory", memory.get("text", ""))
+                    if text:
+                        lines.append(f"- {text}")
 
             lines.append("\nUse memory_search to find specific information, or memory_store to remember new facts.")
 
