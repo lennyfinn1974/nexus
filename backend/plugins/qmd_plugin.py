@@ -109,14 +109,17 @@ class QMDPlugin(NexusPlugin):
     # QMD Execution Helper
     # ────────────────────────────────────────────
 
-    async def _run_qmd(self, args: list[str]) -> Dict[str, Any]:
-        """Execute qmd with --json flag and parse the result."""
+    async def _run_qmd(self, args: list[str], expect_json: bool = True) -> Dict[str, Any]:
+        """Execute qmd and optionally parse JSON result."""
         if not self.qmd_available:
             return {"error": "QMD not available"}
 
         try:
-            # Always add --json flag for structured output
-            cmd_args = [self.qmd_path, "--json"] + args
+            # Add --json flag only for search commands
+            cmd_args = [self.qmd_path]
+            if expect_json and args and args[0] in ["query", "search", "vsearch"]:
+                cmd_args.append("--json")
+            cmd_args.extend(args)
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd_args,
@@ -132,20 +135,25 @@ class QMDPlugin(NexusPlugin):
                 proc.kill()
                 return {"error": f"QMD command timed out after {MAX_EXEC_TIME}s"}
 
-            if proc.returncode != 0:
-                error_msg = stderr.decode(errors="replace").strip()
-                return {"error": f"QMD command failed: {error_msg}"}
-
-            # Parse JSON output
             output = stdout.decode(errors="replace").strip()
+            error_output = stderr.decode(errors="replace").strip()
+
+            if proc.returncode != 0:
+                return {"error": f"QMD command failed: {error_output}"}
+
             if not output:
                 return {"error": "No output from QMD"}
 
-            try:
-                return json.loads(output)
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse QMD JSON output: {e}")
-                return {"error": f"Invalid JSON from QMD: {output[:200]}"}
+            # Try to parse as JSON if expected
+            if expect_json:
+                try:
+                    return json.loads(output)
+                except json.JSONDecodeError:
+                    # If JSON parsing fails, return as plain text
+                    return {"output": output, "text": True}
+            else:
+                # Return plain text output
+                return {"output": output, "text": True}
 
         except Exception as e:
             logger.error(f"QMD execution failed: {e}")
@@ -167,17 +175,24 @@ class QMDPlugin(NexusPlugin):
         collection = params.get("collection", "").strip()
         limit = int(params.get("limit", 5))
 
-        # Build qmd search command
-        args = ["search", query, "--limit", str(limit)]
+        # Build qmd query command (uses BM25 + vector search + reranking)
+        args = ["query", query, "-n", str(limit)]
         if collection:
-            args.extend(["--collection", collection])
+            args.extend(["-c", collection])
 
-        result = await self._run_qmd(args)
+        result = await self._run_qmd(args, expect_json=True)
 
         if "error" in result:
             return f"❌ {result['error']}"
 
-        # Parse search results
+        # Handle plain text response (no results or JSON parsing failed)
+        if result.get("text"):
+            output = result.get("output", "")
+            if "No results found" in output or not output.strip():
+                return f"No documents found for: {query}"
+            return f"🔍 **Search results:**\n```\n{output}\n```"
+
+        # Parse JSON search results
         results = result.get("results", [])
         if not results:
             return f"No documents found for: {query}"
@@ -210,27 +225,20 @@ class QMDPlugin(NexusPlugin):
         # Build qmd get command
         args = ["get", path_or_docid]
 
-        result = await self._run_qmd(args)
+        result = await self._run_qmd(args, expect_json=False)
 
         if "error" in result:
             return f"❌ {result['error']}"
 
-        # Parse document
-        title = result.get("title", "Untitled")
-        path = result.get("path", path_or_docid)
-        content = result.get("content", "")
-        metadata = result.get("metadata", {})
+        # qmd get returns the raw document content
+        content = result.get("output", "")
 
         lines = [
-            f"📄 **{title}**",
-            f"Path: `{path}`",
+            f"📄 **Document: {path_or_docid}**\n",
+            "```",
+            content,
+            "```"
         ]
-
-        if metadata:
-            lines.append(f"Metadata: {json.dumps(metadata, indent=2)}")
-
-        lines.append("\n---\n")
-        lines.append(content)
 
         return "\n".join(lines)
 
@@ -244,31 +252,23 @@ class QMDPlugin(NexusPlugin):
             return "Error: path parameter required"
 
         name = params.get("name", "").strip()
+        if not name:
+            name = os.path.basename(os.path.abspath(path))
 
-        # Build qmd index command
-        args = ["index", path]
-        if name:
-            args.extend(["--name", name])
+        # Build qmd collection add command
+        args = ["collection", "add", path, "--name", name]
 
-        result = await self._run_qmd(args)
+        result = await self._run_qmd(args, expect_json=False)
 
         if "error" in result:
             return f"❌ {result['error']}"
 
-        # Parse indexing result
-        indexed_count = result.get("indexed", 0)
-        collection = result.get("collection", name or os.path.basename(path))
-        errors = result.get("errors", [])
+        # qmd collection add returns plain text output
+        output = result.get("output", "")
 
-        lines = [f"✅ Indexed {indexed_count} documents"]
-        lines.append(f"Collection: **{collection}**")
-
-        if errors:
-            lines.append(f"\n⚠️  {len(errors)} errors:")
-            for error in errors[:5]:  # Show first 5 errors
-                lines.append(f"  - {error}")
-            if len(errors) > 5:
-                lines.append(f"  ... and {len(errors) - 5} more")
+        # Parse the plain text output to extract information
+        lines = [f"✅ Document indexing completed for collection: **{name}**\n"]
+        lines.append(output)
 
         return "\n".join(lines)
 
@@ -277,29 +277,24 @@ class QMDPlugin(NexusPlugin):
         if not self.enabled:
             return "❌ QMD plugin not available"
 
-        # Build qmd list command
-        args = ["list"]
+        # Build qmd collection list command
+        args = ["collection", "list"]
 
-        result = await self._run_qmd(args)
+        result = await self._run_qmd(args, expect_json=False)
 
         if "error" in result:
             return f"❌ {result['error']}"
 
-        # Parse collections
-        collections = result.get("collections", [])
-        if not collections:
+        # qmd collection list returns formatted text output
+        output = result.get("output", "")
+
+        if not output or "Collections (0)" in output:
             return "No collections indexed yet."
 
-        lines = [f"📚 **Indexed Collections ({len(collections)} total):**\n"]
-        for i, collection in enumerate(collections, 1):
-            name = collection.get("name", "Unknown")
-            doc_count = collection.get("documents", 0)
-            path = collection.get("path", "")
-
-            lines.append(f"{i}. **{name}** ({doc_count} documents)")
-            if path:
-                lines.append(f"   Path: `{path}`")
-            lines.append("")
+        lines = ["📚 **Indexed Collections:**\n"]
+        lines.append("```")
+        lines.append(output)
+        lines.append("```")
 
         return "\n".join(lines)
 
