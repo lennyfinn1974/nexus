@@ -1,0 +1,20 @@
+author: user
+description: Comprehensive standards and methodologies for building high-quality,
+  maintainable web applications.
+domain: Software Engineering
+id: skill-9b565cb4
+name: Web Development Best Practices
+triggers:
+  keywords:
+  - web development
+  - best practices
+  - performance
+  - security
+  - accessibility
+  - responsive design
+  - SEO
+  - code quality
+  - testing
+  - optimization
+type: knowledge
+version: '1.0'

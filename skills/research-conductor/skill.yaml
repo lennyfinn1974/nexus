@@ -1,0 +1,74 @@
+id: research-conductor
+name: Multi-Source Research Conductor
+type: integration
+version: "1.0"
+domain: research
+description: Advanced research engine with multi-source analysis, credibility scoring, and synthesis capabilities
+author: partnership
+
+config:
+  SERPAPI_KEY:
+    label: SerpAPI Key
+    type: password
+    required: false
+    description: API key for enhanced search results (optional)
+  BRAVE_API_KEY:
+    label: Brave Search API Key
+    type: password
+    required: false
+    description: API key for Brave Search (optional)
+
+triggers:
+  keywords:
+    - research
+    - investigate
+    - analyze
+    - study
+    - examine
+    - explore
+    - find information
+    - comprehensive analysis
+    - deep dive
+    - fact check
+  patterns:
+    - "(?:research|investigate|analyze) (?:the|this|about) .+"
+    - "(?:find|gather) (?:information|data) (?:about|on) .+"
+    - "(?:comprehensive|detailed|thorough) (?:analysis|study|research)"
+    - "(?:fact check|verify|validate) .+"
+
+actions:
+  - name: conduct_research
+    description: Conduct comprehensive multi-source research on a topic
+    handler: conduct_research
+    parameters:
+      topic: Research topic or question
+      depth: Research depth (quick/standard/comprehensive)
+      sources: Number of sources to analyze (default 10)
+      
+  - name: analyze_credibility
+    description: Analyze the credibility and reliability of sources
+    handler: analyze_credibility
+    parameters:
+      urls: List of URLs to analyze for credibility
+      
+  - name: synthesize_findings
+    description: Synthesize research findings into a coherent analysis
+    handler: synthesize_findings
+    parameters:
+      sources: List of source data to synthesize
+      format: Output format (summary/report/bullet_points)
+      
+  - name: fact_check
+    description: Fact-check claims against multiple authoritative sources
+    handler: fact_check
+    parameters:
+      claim: Statement or claim to verify
+      thoroughness: Verification depth (basic/thorough/exhaustive)
+      
+  - name: monitor_topic
+    description: Set up ongoing monitoring of a research topic
+    handler: monitor_topic
+    parameters:
+      topic: Topic to monitor
+      frequency: Check frequency (hourly/daily/weekly)
+      alert_threshold: Significance threshold for alerts

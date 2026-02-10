@@ -1,0 +1,51 @@
+# Skill Pack Template
+#
+# To create a new integration skill:
+# 1. Copy this folder and rename it (e.g. my-service/)
+# 2. Edit skill.yaml with your details
+# 3. Write knowledge.md with context for the AI
+# 4. Optionally add actions.py with executable functions
+# 5. Install: copy folder to data/skills/ and restart, or use
+#    the admin panel to install the skill pack
+
+id: my-skill
+name: My Skill
+type: integration          # "knowledge" for info-only, "integration" for connectors
+version: "1.0"
+domain: general
+description: A template skill — copy and modify this
+author: user
+
+# Config: settings this skill needs (shown in admin Settings page)
+# These get stored alongside other Nexus settings
+config:
+  MY_API_KEY:
+    label: API Key
+    type: password           # text | password | number | select
+    required: true
+    description: Your service API key
+  MY_ENDPOINT:
+    label: API Endpoint
+    type: text
+    required: false
+    description: Custom endpoint URL (optional)
+
+# Triggers: when should this skill activate?
+triggers:
+  keywords:
+    - my service
+    - my skill
+    - look up
+  patterns:
+    - "use my.?service .*"
+    - "query .* from my.?service"
+
+# Actions: functions the AI can call
+# Each action needs a matching function in actions.py
+actions:
+  - name: my_skill_search
+    description: Search for something using My Service
+    handler: my_skill_search     # Function name in actions.py
+    parameters:
+      query: Search query string
+      limit: Max results (default 5)
