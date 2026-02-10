@@ -107,7 +107,9 @@ const oauthKeys = [
   { key: 'ANTHROPIC_API_KEY', label: 'Anthropic API Key', testable: true },
   { key: 'GITHUB_TOKEN', label: 'GitHub Token', testable: true },
   { key: 'TELEGRAM_BOT_TOKEN', label: 'Telegram Bot Token', testable: false },
-  { key: 'OPENCLAW_TOKEN', label: 'OpenClaw Token', testable: false },
+  { key: 'MEM0_API_KEY', label: 'Mem0 API Key', testable: false },
+  { key: 'GOOGLE_API_KEY', label: 'Google Search API Key', testable: false },
+  { key: 'GOOGLE_CSE_ID', label: 'Google Custom Search Engine ID', testable: false },
 ]
 
 function OAuthTab() {
