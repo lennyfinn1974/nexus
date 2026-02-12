@@ -23,7 +23,7 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-7">
         <StatCard
           label="Ollama"
           value={
@@ -41,6 +41,15 @@ export default function DashboardPage() {
             </span>
           }
           sub={status?.models.claude_model}
+        />
+        <StatCard
+          label="Claude Code"
+          value={
+            <span className={status?.models.claude_code_available ? 'text-success' : 'text-muted-foreground'}>
+              {status?.models.claude_code_available ? 'Online' : 'Off'}
+            </span>
+          }
+          sub={status?.models.claude_code_model ?? 'disabled'}
         />
         <StatCard label="Plugins" value={Object.keys(status?.plugins ?? {}).length} sub="active" />
         <StatCard label="Skills" value={status?.skills_count ?? 0} sub="learned" />

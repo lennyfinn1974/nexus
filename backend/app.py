@@ -29,6 +29,7 @@ from middleware import (
     register_exception_handlers,
 )
 from models.claude_client import ClaudeClient
+from models.claude_code_client import ClaudeCodeClient
 from models.ollama_client import OllamaClient
 from models.router import ModelRouter
 from plugins.manager import PluginManager
@@ -42,22 +43,39 @@ from tasks.queue import TaskQueue
 logger = logging.getLogger("nexus")
 
 # ── Logging setup ──
+from core.logging_config import ContextFilter, JSONFormatter
+
 LOG_FORMAT = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
+_context_filter = ContextFilter()
+
 _console_handler = logging.StreamHandler()
 _console_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT))
+_console_handler.addFilter(_context_filter)
 
 _log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 os.makedirs(_log_dir, exist_ok=True)
+
+# Human-readable log (existing)
 _file_handler = logging.handlers.RotatingFileHandler(
     os.path.join(_log_dir, "access.log"),
     maxBytes=10 * 1024 * 1024,
     backupCount=5,
 )
 _file_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT))
+_file_handler.addFilter(_context_filter)
 
-logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _file_handler])
+# Structured JSON log (new — JSON Lines format for machine parsing)
+_json_handler = logging.handlers.RotatingFileHandler(
+    os.path.join(_log_dir, "nexus.jsonl"),
+    maxBytes=10 * 1024 * 1024,
+    backupCount=5,
+)
+_json_handler.setFormatter(JSONFormatter())
+_json_handler.addFilter(_context_filter)
+
+logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _file_handler, _json_handler])
 
 
 # ── Application State ──
@@ -131,10 +149,51 @@ async def _on_model_settings_changed(key, old_value, new_value, state: AppState)
     logger.info(f"Model setting changed: {key} -- reconnecting models")
     ollama = OllamaClient(state.cfg.ollama_base_url, state.cfg.ollama_model)
     claude = ClaudeClient(state.cfg.anthropic_api_key, state.cfg.claude_model) if state.cfg.has_anthropic else None
-    state.model_router = ModelRouter(ollama, claude, state.cfg.complexity_threshold)
+
+    # Preserve Claude Code client (it's config-driven, not key-driven)
+    claude_code = state.model_router.claude_code if state.model_router else None
+    if state.cfg.get_bool("CLAUDE_CODE_ENABLED", False) and not claude_code:
+        mcp_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp", "mcp_config.json")
+        claude_code = ClaudeCodeClient(
+            cli_path=state.cfg.get("CLAUDE_CODE_CLI_PATH", "/opt/homebrew/bin/claude"),
+            model=state.cfg.get("CLAUDE_CODE_MODEL", "sonnet"),
+            mcp_config_path=mcp_config_path,
+        )
+
+    state.model_router = ModelRouter(ollama, claude, claude_code, state.cfg.complexity_threshold)
     await state.model_router.check_availability()
     if state.plugin_manager:
         state.plugin_manager.router = state.model_router
+
+
+def _discover_catalog_sources(cfg) -> list[str]:
+    """Find external skill catalog directories (anti-gravity, etc.).
+
+    Checks:
+    1. SKILL_CATALOG_SOURCES config setting (comma-separated paths)
+    2. Well-known locations: ~/antigravity-awesome-skills, ~/.agent/skills
+    """
+    sources: list[str] = []
+
+    # Explicit config
+    explicit = cfg.get("SKILL_CATALOG_SOURCES", "")
+    if explicit:
+        for path in explicit.split(","):
+            path = path.strip()
+            if path and os.path.isdir(path):
+                sources.append(path)
+
+    # Auto-discover well-known locations
+    home = os.path.expanduser("~")
+    well_known = [
+        os.path.join(home, "antigravity-awesome-skills"),
+        os.path.join(home, ".agent", "skills"),
+    ]
+    for path in well_known:
+        if os.path.isdir(path) and path not in sources:
+            sources.append(path)
+
+    return sources
 
 
 # ── Lifespan ──
@@ -183,7 +242,15 @@ async def lifespan(app: FastAPI):
 
     # Database
     state.db = Database(session_factory)
+    await state.db.ensure_summary_table()
+    await state.db.ensure_work_items_table()
     logger.info("Database connected")
+
+    # Work Registry (unified work item tracking)
+    from core.work_registry import work_registry
+    from websocket_manager import websocket_manager
+
+    work_registry.init(state.db, websocket_manager)
 
     # Auth system
     secret_path = os.path.join(base_dir, ".nexus_secret")
@@ -200,21 +267,65 @@ async def lifespan(app: FastAPI):
     # Model clients
     ollama = OllamaClient(state.cfg.ollama_base_url, state.cfg.ollama_model)
     claude = ClaudeClient(state.cfg.anthropic_api_key, state.cfg.claude_model) if state.cfg.has_anthropic else None
-    state.model_router = ModelRouter(ollama, claude, state.cfg.complexity_threshold)
+
+    # Claude Code CLI client (subprocess-based, with MCP tools)
+    mcp_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp", "mcp_config.json")
+    claude_code = None
+    if state.cfg.get_bool("CLAUDE_CODE_ENABLED", False):
+        claude_code_cli = state.cfg.get("CLAUDE_CODE_CLI_PATH", "/opt/homebrew/bin/claude")
+        claude_code_model = state.cfg.get("CLAUDE_CODE_MODEL", "sonnet")
+        claude_code = ClaudeCodeClient(
+            cli_path=claude_code_cli,
+            model=claude_code_model,
+            mcp_config_path=mcp_config_path,
+            timeout=300,
+        )
+        logger.info(f"Claude Code client configured (cli={claude_code_cli}, model={claude_code_model})")
+
+    state.model_router = ModelRouter(ollama, claude, claude_code, state.cfg.complexity_threshold)
     await state.model_router.check_availability()
 
     # Skills
     state.skills_engine = SkillsEngine(state.cfg.skills_dir, state.db, config_manager=state.cfg)
     await state.skills_engine.load_all()
 
+    # Skill Catalog (external skill sources — anti-gravity, etc.)
+    from skills.catalog import SkillCatalog
+
+    catalog_sources = _discover_catalog_sources(state.cfg)
+    state.skill_catalog = SkillCatalog(
+        sources=catalog_sources,
+        installed_dir=state.cfg.skills_dir,
+    )
+    if catalog_sources:
+        count = state.skill_catalog.load_index()
+        logger.info(f"Skill catalog: {count} skills from {len(catalog_sources)} source(s)")
+    else:
+        logger.info("Skill catalog: no external sources found")
+
     # Task queue
     state.task_queue = TaskQueue(state.db, state.cfg.max_research_tasks)
     state.task_queue.register_handler("research", lambda p: _handle_research_task(p, state))
     state.task_queue.register_handler("ingest", lambda p: _handle_ingest_task(p, state))
 
+    # Register periodic tasks and start scheduler
+    state.task_queue.register_periodic(
+        name="self_improvement",
+        task_type="research",
+        interval_seconds=24 * 60 * 60,  # Every 24 hours
+        payload={"topic": "self-improvement review", "auto": True},
+        enabled=False,  # Enable via admin when ready
+    )
+    state.task_queue.start_scheduler()
+
     # Plugins
     state.plugin_manager = PluginManager(state.cfg, state.db, state.model_router)
     await state.plugin_manager.discover_and_load()
+
+    # Inject catalog into catalog plugin (after plugin discovery)
+    catalog_plugin = state.plugin_manager.plugins.get("catalog")
+    if catalog_plugin and hasattr(catalog_plugin, "set_catalog"):
+        catalog_plugin.set_catalog(state.skill_catalog, state.skills_engine)
 
     # Tool executor (Phase 6)
     try:
@@ -225,7 +336,7 @@ async def lifespan(app: FastAPI):
         state.tool_executor = None
 
     # CORS origins
-    _allowed_origins_raw = os.getenv("ALLOWED_ORIGINS", "http://localhost:8081,http://127.0.0.1:8081")
+    _allowed_origins_raw = os.getenv("ALLOWED_ORIGINS", "http://localhost:8080,http://127.0.0.1:8080")
     state.allowed_origins = [o.strip() for o in _allowed_origins_raw.split(",") if o.strip()]
 
     # Admin API
@@ -242,6 +353,8 @@ async def lifespan(app: FastAPI):
         user_manager=state.user_manager,
         ip_security=state.ip_security,
         audit_log=state.audit_log,
+        skill_catalog=state.skill_catalog,
+        work_registry=work_registry,
     )
 
     # Telegram (optional)
@@ -250,7 +363,7 @@ async def lifespan(app: FastAPI):
             from channels.telegram import TelegramChannel
             from core.message_processor import get_status, process_message
 
-            async def tg_handler(user_id: str, text: str) -> str:
+            async def tg_handler(user_id: str, text: str, conv_id: str = None) -> str:
                 return await process_message(
                     user_id,
                     text,
@@ -260,12 +373,15 @@ async def lifespan(app: FastAPI):
                     model_router=state.model_router,
                     task_queue=state.task_queue,
                     plugin_manager=state.plugin_manager,
+                    skill_catalog=getattr(state, "skill_catalog", None),
+                    conv_id=conv_id,
                 )
 
             state.telegram_channel = TelegramChannel(
                 state.cfg.telegram_bot_token,
-                state.cfg.telegram_allowed_users,
+                state.db,
                 tg_handler,
+                agent_name=state.cfg.agent_name,
             )
             await state.telegram_channel.start(
                 status_fn=lambda: get_status(
@@ -279,6 +395,41 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Telegram failed to start: {e}")
 
+    # Passive Memory Extractor — auto-learns from conversations
+    try:
+        from core.passive_memory import PassiveMemoryExtractor
+        state.passive_memory = PassiveMemoryExtractor(state.db)
+        logger.info("Passive memory extractor initialized")
+    except Exception as e:
+        state.passive_memory = None
+        logger.warning(f"Passive memory failed to initialize: {e}")
+
+    # Reminder Manager — scheduled user reminders
+    try:
+        from core.reminders import ReminderManager
+
+        async def _on_reminder_fire(reminder):
+            """Deliver a reminder to all connected WebSocket clients."""
+            from websocket_manager import websocket_manager
+            msg = {
+                "type": "system",
+                "content": f"⏰ **Reminder:** {reminder.message}",
+            }
+            # Send to all connected clients (broadcast)
+            for ws_id in list(websocket_manager._connections.keys()):
+                try:
+                    await websocket_manager.send_to_client(ws_id, msg)
+                except Exception:
+                    pass
+            logger.info(f"Reminder delivered: {reminder.id} — {reminder.message}")
+
+        state.reminder_manager = ReminderManager(on_fire=_on_reminder_fire)
+        state.reminder_manager.start()
+        logger.info("Reminder manager started")
+    except Exception as e:
+        state.reminder_manager = None
+        logger.warning(f"Reminder manager failed to initialize: {e}")
+
     # Expose state on the app
     app.state.nexus = state
 
@@ -287,6 +438,10 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ──
     logger.info("Shutting down...")
+    if getattr(state, "reminder_manager", None):
+        state.reminder_manager.stop()
+    if getattr(state, "task_queue", None):
+        state.task_queue.stop_scheduler()
     if state.plugin_manager:
         await state.plugin_manager.shutdown_all()
     if state.telegram_channel:
@@ -322,7 +477,7 @@ def create_app() -> FastAPI:
 
     # Middleware (order: outermost first in add_middleware calls,
     # but Starlette processes them in reverse — last added is outermost)
-    _allowed_origins_raw = os.getenv("ALLOWED_ORIGINS", "http://localhost:8081,http://127.0.0.1:8081")
+    _allowed_origins_raw = os.getenv("ALLOWED_ORIGINS", "http://localhost:8080,http://127.0.0.1:8080")
     allowed_origins = [o.strip() for o in _allowed_origins_raw.split(",") if o.strip()]
 
     app.add_middleware(AuthMiddleware)

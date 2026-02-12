@@ -131,6 +131,53 @@
   .conv-item:hover .conv-delete { display: block; }
   .conv-item .conv-delete:hover { color: var(--error); }
 
+  /* ── Search ── */
+  .search-box {
+    padding: 8px 12px;
+  }
+  .search-input-wrap {
+    position: relative; display: flex; align-items: center;
+  }
+  .search-input-wrap svg {
+    position: absolute; left: 10px; width: 14px; height: 14px;
+    color: var(--text-muted); pointer-events: none;
+  }
+  .search-input {
+    width: 100%; padding: 8px 30px 8px 32px;
+    background: var(--bg-tertiary); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); color: var(--text-primary);
+    font-family: var(--font-sans); font-size: 12px; outline: none;
+    transition: border-color 0.15s;
+  }
+  .search-input:focus { border-color: var(--accent); }
+  .search-input::placeholder { color: var(--text-muted); }
+  .search-clear {
+    position: absolute; right: 8px; background: none; border: none;
+    color: var(--text-muted); cursor: pointer; font-size: 14px;
+    padding: 2px; display: none;
+  }
+  .search-clear:hover { color: var(--text-primary); }
+  .search-results {
+    padding: 4px 8px;
+  }
+  .search-result-item {
+    padding: 8px 10px; margin-bottom: 4px; border-radius: 6px;
+    cursor: pointer; font-size: 11px; color: var(--text-secondary);
+    transition: all 0.15s; border: 1px solid var(--border);
+    background: var(--bg-tertiary);
+  }
+  .search-result-item:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--accent); }
+  .search-result-conv { font-size: 10px; color: var(--accent); margin-bottom: 3px; font-weight: 600; }
+  .search-result-headline { font-size: 11px; line-height: 1.4; color: var(--text-secondary); }
+  .search-result-headline b { color: var(--warning); font-weight: 600; }
+  .search-result-meta {
+    display: flex; justify-content: space-between; margin-top: 4px;
+    font-size: 10px; color: var(--text-muted);
+  }
+  .search-no-results {
+    padding: 12px; text-align: center; font-size: 11px; color: var(--text-muted);
+  }
+
   /* ── Status Bar ── */
   .status-bar {
     padding: 12px 16px;
@@ -219,6 +266,21 @@
     font-size: 12px;
     font-style: italic;
     padding: 6px 12px;
+  }
+
+  .message.system:has(table),
+  .message.system:has(h2),
+  .message.system:has(h3) {
+    align-self: stretch;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 20px;
+    font-style: normal;
+    font-size: 13px;
+    color: var(--text-secondary);
+    max-width: 680px;
+    margin: 8px auto;
   }
 
   .message-meta {
@@ -668,10 +730,19 @@
     </button>
   </div>
 
-  <div class="sidebar-section">
+  <div class="search-box">
+    <div class="search-input-wrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input class="search-input" id="searchInput" type="text" placeholder="Search conversations..." oninput="handleSearch(this.value)" />
+      <button class="search-clear" id="searchClear" onclick="clearSearch()">×</button>
+    </div>
+  </div>
+
+  <div class="sidebar-section" id="recentChatsHeader">
     <div class="sidebar-section-title">Recent Chats</div>
   </div>
   <div class="conversations-list" id="convList"></div>
+  <div class="search-results" id="searchResults" style="display:none"></div>
 
   <div class="status-bar" id="statusBar">
     <div class="status-item"><span class="status-dot off" id="ollamaStatus"></span> Ollama</div>
@@ -1058,7 +1129,8 @@
         break;
 
       case 'system':
-        addMessage(data.content, 'system');
+        const sysEl = addMessage(data.content, 'system');
+        sysEl.querySelector('.msg-content').innerHTML = renderContent(data.content);
         break;
 
       case 'error':
@@ -1068,6 +1140,90 @@
         isStreaming = false;
         break;
     }
+  }
+
+  // ── Conversation Search ──
+
+  let searchTimeout = null;
+  let isSearching = false;
+
+  function handleSearch(query) {
+    const clearBtn = document.getElementById('searchClear');
+    clearBtn.style.display = query ? 'block' : 'none';
+
+    clearTimeout(searchTimeout);
+    if (!query.trim()) {
+      clearSearch();
+      return;
+    }
+    // Debounce 300ms
+    searchTimeout = setTimeout(() => performSearch(query.trim()), 300);
+  }
+
+  async function performSearch(query) {
+    if (query.length < 2) return;
+    isSearching = true;
+    const resultsEl = document.getElementById('searchResults');
+    const convListEl = document.getElementById('convList');
+    const headerEl = document.getElementById('recentChatsHeader');
+
+    // Hide conv list, show search results
+    convListEl.style.display = 'none';
+    headerEl.querySelector('.sidebar-section-title').textContent = 'Search Results';
+    resultsEl.style.display = 'block';
+    resultsEl.innerHTML = '<div class="search-no-results">Searching...</div>';
+
+    try {
+      const resp = await fetch(`/api/conversations/search?q=${encodeURIComponent(query)}&limit=20`);
+      const data = await resp.json();
+
+      if (!data.results || data.results.length === 0) {
+        resultsEl.innerHTML = '<div class="search-no-results">No results found</div>';
+        return;
+      }
+
+      resultsEl.innerHTML = data.results.map(r => {
+        const headline = (r.headline || '').replace(/\*\*/g, function(m, offset, str) {
+          // Toggle b tags: odd ** = open, even ** = close
+          return '';
+        });
+        // Better headline parsing: replace **word** with <b>word</b>
+        const formattedHeadline = (r.headline || r.content || '').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+        const convTitle = escapeHtml(r.conversation_title || 'Untitled');
+        const date = r.created_at ? new Date(r.created_at).toLocaleDateString() : '';
+        const role = r.role === 'assistant' ? '🤖' : '👤';
+
+        return `<div class="search-result-item" onclick="jumpToSearchResult('${r.conversation_id}')">
+          <div class="search-result-conv">${convTitle}</div>
+          <div class="search-result-headline">${role} ${formattedHeadline}</div>
+          <div class="search-result-meta"><span>${date}</span><span>relevance: ${(r.rank * 100).toFixed(0)}%</span></div>
+        </div>`;
+      }).join('');
+    } catch (e) {
+      console.error('Search failed:', e);
+      resultsEl.innerHTML = '<div class="search-no-results">Search failed</div>';
+    }
+  }
+
+  function jumpToSearchResult(convId) {
+    clearSearch();
+    switchConversation(convId);
+  }
+
+  function clearSearch() {
+    const searchInput = document.getElementById('searchInput');
+    const clearBtn = document.getElementById('searchClear');
+    const resultsEl = document.getElementById('searchResults');
+    const convListEl = document.getElementById('convList');
+    const headerEl = document.getElementById('recentChatsHeader');
+
+    searchInput.value = '';
+    clearBtn.style.display = 'none';
+    resultsEl.style.display = 'none';
+    resultsEl.innerHTML = '';
+    convListEl.style.display = 'block';
+    headerEl.querySelector('.sidebar-section-title').textContent = 'Recent Chats';
+    isSearching = false;
   }
 
   // ── Conversation List ──
@@ -1244,11 +1400,48 @@
     html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
     // Bold
     html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    // Italic
-    html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-    // Line breaks
+    // Italic (but not inside URLs or already-processed tags)
+    html = html.replace(/(?<!\w)\*([^*]+)\*(?!\w)/g, '<em>$1</em>');
+    // Markdown tables — convert pipe-delimited rows to HTML table
+    html = renderTables(html);
+    // Headers (## and #)
+    html = html.replace(/^### (.+)$/gm, '<h4 style="margin:8px 0 4px;font-size:13px;color:var(--text-secondary)">$1</h4>');
+    html = html.replace(/^## (.+)$/gm, '<h3 style="margin:12px 0 6px;font-size:14px;color:var(--accent)">$1</h3>');
+    html = html.replace(/^# (.+)$/gm, '<h2 style="margin:12px 0 8px;font-size:16px;color:var(--accent)">$1</h2>');
+    // Line breaks (but not inside tables/pre)
     html = html.replace(/\n/g, '<br>');
+    // Clean up double <br> from table rendering
+    html = html.replace(/<br>\s*(<table)/g, '$1');
+    html = html.replace(/(<\/table>)\s*<br>/g, '$1');
+    html = html.replace(/<br>\s*(<h[234])/g, '$1');
+    html = html.replace(/(<\/h[234]>)\s*<br>/g, '$1');
     return html;
+  }
+
+  function renderTables(html) {
+    // Match markdown table blocks: header row, separator row, data rows
+    const tableRegex = /(?:^|\n)(\|.+\|)\n(\|[\s\-:|]+\|)\n((?:\|.+\|\n?)+)/g;
+    return html.replace(tableRegex, function(match, headerRow, sepRow, bodyRows) {
+      const headers = headerRow.split('|').filter(c => c.trim()).map(c => c.trim());
+      const rows = bodyRows.trim().split('\n').map(row =>
+        row.split('|').filter(c => c.trim()).map(c => c.trim())
+      );
+      let table = '<table style="width:100%;border-collapse:collapse;margin:8px 0;font-size:12px">';
+      table += '<thead><tr>';
+      headers.forEach(h => {
+        table += `<th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border);color:var(--accent);font-weight:600">${h}</th>`;
+      });
+      table += '</tr></thead><tbody>';
+      rows.forEach(row => {
+        table += '<tr>';
+        row.forEach(cell => {
+          table += `<td style="padding:4px 8px;border-bottom:1px solid rgba(255,255,255,0.05)">${cell}</td>`;
+        });
+        table += '</tr>';
+      });
+      table += '</tbody></table>';
+      return table;
+    });
   }
 
   function escapeHtml(text) {

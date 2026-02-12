@@ -36,7 +36,18 @@ export interface ModelsResponse {
   ollama_available: boolean
   claude_model: string
   claude_available: boolean
+  claude_code_available: boolean
+  claude_code_model: string | null
+  claude_code_enabled: boolean
   complexity_threshold: number
+  // Sub-agent settings
+  sub_agent_enabled?: boolean
+  sub_agent_auto_enabled?: boolean
+  sub_agent_max_concurrent?: number
+  sub_agent_cc_concurrent?: number
+  sub_agent_builder_model?: string
+  sub_agent_reviewer_model?: string
+  sub_agent_timeout?: number
 }
 
 export interface OllamaModel {
@@ -91,8 +102,10 @@ export interface PluginsResponse {
 export interface ModelStatus {
   ollama_available: boolean
   claude_available: boolean
+  claude_code_available: boolean
   ollama_model: string
   claude_model: string
+  claude_code_model: string | null
 }
 
 export interface StatusResponse {
@@ -114,7 +127,7 @@ export interface HealthResponse {
   timestamp: number
   checks: {
     database: HealthCheck
-    models: HealthCheck & { claude?: string; ollama?: string }
+    models: HealthCheck & { claude?: string; ollama?: string; claude_code?: string }
     plugins: HealthCheck & { total?: number; errors?: number }
     filesystem: HealthCheck
     memory: HealthCheck & { usage_percent?: number; available_mb?: number }
@@ -161,6 +174,30 @@ export interface Task {
   completed_at?: string
   result?: string
   error?: string
+}
+
+// ── Work Items ──
+export interface WorkItem {
+  id: string
+  kind: 'agent' | 'sub_agent' | 'plan' | 'plan_step' | 'task' | 'reminder' | 'orchestration'
+  title: string
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  parent_id: string | null
+  conv_id: string | null
+  model: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+}
+
+export interface WorkItemCounts {
+  pending: number
+  running: number
+  completed: number
+  failed: number
+  cancelled: number
+  total: number
 }
 
 // ── Audit ──
@@ -233,4 +270,45 @@ export interface SkillPack {
   version: string
   config_keys: string[]
   installed: boolean
+}
+
+// ── Catalog ──
+export interface CatalogEntry {
+  id: string
+  name: string
+  description: string
+  category: string
+  source: string
+  size_kb: number
+  installed: boolean
+}
+
+export interface CatalogSearchResponse {
+  results: CatalogEntry[]
+  total: number
+}
+
+export interface CatalogCategory {
+  category: string
+  count: number
+}
+
+export interface CatalogInstallResponse {
+  success: boolean
+  message: string
+  skill_id: string
+  name: string
+}
+
+// ── Setup ──
+export interface SetupStatusResponse {
+  setup_complete: boolean
+  has_admin_key: boolean
+  has_model: boolean
+  has_telegram: boolean
+}
+
+export interface SetupCompleteResponse {
+  success: boolean
+  message: string
 }

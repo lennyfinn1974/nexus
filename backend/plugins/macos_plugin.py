@@ -40,42 +40,49 @@ class MacOSPlugin(NexusPlugin):
             "Open a macOS application by name (e.g., 'Safari', 'Terminal', 'Finder')",
             {"app_name": "Application name to open"},
             self._macos_open_app,
+            category="system",
         )
         self.add_tool(
             "macos_open_file",
             "Open a file with its default application (like double-clicking in Finder)",
             {"path": "Full path to file or directory to open"},
             self._macos_open_file,
+            category="system",
         )
         self.add_tool(
             "macos_notify",
             "Display a macOS notification banner",
             {"title": "Notification title", "message": "Notification message"},
             self._macos_notify,
+            category="system",
         )
         self.add_tool(
             "macos_clipboard_get",
             "Get the current clipboard contents",
             {},
             self._macos_clipboard_get,
+            category="system",
         )
         self.add_tool(
             "macos_clipboard_set",
             "Set the clipboard to specific text",
             {"text": "Text to copy to clipboard"},
             self._macos_clipboard_set,
+            category="system",
         )
         self.add_tool(
             "macos_window_list",
             "List all visible windows from all applications",
             {},
             self._macos_window_list,
+            category="system",
         )
         self.add_tool(
             "macos_screenshot",
             "Take a screenshot and save to a file (default: ~/Desktop/screenshot.png)",
             {"path": "Optional: full path where to save screenshot (default: ~/Desktop/screenshot.png)"},
             self._macos_screenshot,
+            category="system",
         )
 
         # ── File Tools ──
@@ -84,30 +91,35 @@ class MacOSPlugin(NexusPlugin):
             "Move or rename a file or directory",
             {"src": "Source path", "dest": "Destination path"},
             self._file_move,
+            category="files",
         )
         self.add_tool(
             "file_copy",
             "Copy a file or directory",
             {"src": "Source path", "dest": "Destination path"},
             self._file_copy,
+            category="files",
         )
         self.add_tool(
             "file_delete",
             "Delete a file or directory (use with caution!)",
             {"path": "Path to delete", "confirm": "Set to 'yes' to confirm deletion"},
             self._file_delete,
+            category="files",
         )
         self.add_tool(
             "file_find",
             "Find files matching a pattern (recursive search)",
             {"pattern": "Filename pattern to search for (e.g., '*.txt', 'config*')", "path": "Directory to search in (default: current directory)"},
             self._file_find,
+            category="files",
         )
         self.add_tool(
             "file_info",
             "Get detailed info about a file or directory (size, permissions, modified date)",
             {"path": "Path to inspect"},
             self._file_info,
+            category="files",
         )
 
         # ── Keyboard Tools ──
@@ -116,18 +128,21 @@ class MacOSPlugin(NexusPlugin):
             "Type text as if typed on the keyboard (simulates keypresses)",
             {"text": "Text to type"},
             self._keyboard_type,
+            category="system",
         )
         self.add_tool(
             "keyboard_shortcut",
             "Press a keyboard shortcut (e.g., 'command c' for copy, 'command v' for paste)",
             {"keys": "Shortcut keys, e.g., 'command c', 'control shift t'"},
             self._keyboard_shortcut,
+            category="system",
         )
         self.add_tool(
             "keyboard_press",
             "Press a single key (e.g., 'return', 'tab', 'escape', 'space')",
             {"key": "Key name: return, tab, escape, space, delete, etc."},
             self._keyboard_press,
+            category="system",
         )
 
     def register_commands(self):

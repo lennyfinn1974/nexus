@@ -1,0 +1,35 @@
+id: github-manager
+name: GitHub Manager
+type: integration
+version: 1.0.0
+domain: development
+description: Clone repos, list repos, view PRs using gh CLI
+author: nexus
+triggers:
+  keywords: [github, repo, repository, clone, pull request, pr]
+  patterns:
+    - "clone .*"
+    - "(list|show) (my )?repos.*"
+    - "(list|show) (pull requests|prs).*"
+    - "view pr.*"
+actions:
+  - name: github_clone
+    description: Clone a GitHub repository
+    parameters:
+      repo: Repository in owner/name format
+      directory: Target directory (optional)
+  - name: github_list_repos
+    description: List your GitHub repositories
+    parameters:
+      limit: Max repos to show (default 10)
+      sort: Sort by — stars, updated, created (default updated)
+  - name: github_pr_list
+    description: List pull requests for a repository
+    parameters:
+      repo: Repository in owner/name format
+      state: open/closed/merged/all (default open)
+  - name: github_pr_view
+    description: View details of a specific pull request
+    parameters:
+      repo: Repository in owner/name format
+      number: PR number

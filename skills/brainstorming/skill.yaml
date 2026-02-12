@@ -1,0 +1,21 @@
+author: antigravity
+description: Use this skill before any creative or constructive work (features, components,
+  architecture, behavior changes, or functionality). This skill transforms vague ideas
+  into validated designs through disci
+domain: uncategorized
+id: brainstorming
+name: brainstorming
+triggers:
+  keywords:
+  - brainstorming
+  - skill
+  - creative
+  - constructive
+  - work
+  - features
+  - components
+  - architecture
+  - behavior
+  - changes
+type: knowledge
+version: '1.0'

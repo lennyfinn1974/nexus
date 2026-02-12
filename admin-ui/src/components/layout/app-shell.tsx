@@ -16,6 +16,7 @@ const pageTitles: Record<string, string> = {
   '/admin/logs': 'Live Logs',
   '/admin/system': 'System',
   '/admin/skills': 'Skills',
+  '/admin/workstreams': 'Work Streams',
 }
 
 export default function AppShell({ children }: { children: ReactNode }) {

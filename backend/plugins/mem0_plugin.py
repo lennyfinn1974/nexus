@@ -68,6 +68,7 @@ class Mem0Plugin(NexusPlugin):
                 "limit": "Maximum number of results (default: 5)",
             },
             self._memory_search,
+            category="memory",
         )
 
         self.add_tool(
@@ -78,6 +79,7 @@ class Mem0Plugin(NexusPlugin):
                 "metadata": "Optional metadata as JSON string (e.g., category, tags)",
             },
             self._memory_store,
+            category="memory",
         )
 
         self.add_tool(
@@ -85,6 +87,7 @@ class Mem0Plugin(NexusPlugin):
             "List all stored memories. Use to review what has been remembered.",
             {},
             self._memory_list,
+            category="memory",
         )
 
         self.add_tool(
@@ -92,6 +95,7 @@ class Mem0Plugin(NexusPlugin):
             "Retrieve a specific memory by its ID.",
             {"memory_id": "The ID of the memory to retrieve"},
             self._memory_get,
+            category="memory",
         )
 
         self.add_tool(
@@ -99,6 +103,7 @@ class Mem0Plugin(NexusPlugin):
             "Delete a specific memory by its ID. Use when information is outdated or the user requests deletion.",
             {"memory_id": "The ID of the memory to delete"},
             self._memory_forget,
+            category="memory",
         )
 
     def register_commands(self) -> None:

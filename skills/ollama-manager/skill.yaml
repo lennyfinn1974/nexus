@@ -1,0 +1,33 @@
+id: ollama-manager
+name: Ollama Model Manager
+type: integration
+version: 1.0.0
+domain: ai
+description: Manage local Ollama models — list, pull, remove, and inspect
+author: nexus
+triggers:
+  keywords: [ollama, model, pull, download, local model, llm]
+  patterns:
+    - "ollama (list|pull|remove|info|running).*"
+    - "(list|show) (ollama )?models.*"
+    - "pull model.*"
+    - "download model.*"
+actions:
+  - name: ollama_list
+    description: List all installed Ollama models
+    parameters: {}
+  - name: ollama_pull
+    description: Pull/download an Ollama model
+    parameters:
+      model: Model name to pull (e.g. llama3, mistral)
+  - name: ollama_remove
+    description: Remove an installed Ollama model
+    parameters:
+      model: Model name to remove
+  - name: ollama_model_info
+    description: Get details about an installed model
+    parameters:
+      model: Model name to inspect
+  - name: ollama_running
+    description: List currently running/loaded models
+    parameters: {}

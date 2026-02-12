@@ -1,9 +1,10 @@
 """SQLAlchemy ORM models for Nexus.
 
-All 18 tables: 12 existing (conversations, messages, skills, tasks, settings,
+All 20 tables: 12 core (conversations, messages, skills, tasks, settings,
 settings_audit, user_preferences, project_contexts, interaction_patterns,
 session_contexts, knowledge_associations, user_goals) plus 6 auth/security
-tables (users, whitelist, sessions, blocked_ips, auth_audit, rate_limits).
+tables (users, whitelist, sessions, blocked_ips, auth_audit, rate_limits)
+plus 2 Telegram pairing tables (telegram_pairings, pairing_codes).
 """
 
 from datetime import datetime, timezone
@@ -63,6 +64,20 @@ class Message(Base):
     __table_args__ = (
         CheckConstraint("role IN ('user', 'assistant', 'system')", name="ck_messages_role"),
         Index("idx_messages_conversation", "conversation_id", "created_at"),
+    )
+
+
+class ConversationSummary(Base):
+    __tablename__ = "conversation_summaries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversation_id = Column(String, ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False)
+    summary_text = Column(Text, nullable=False)
+    messages_covered = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        Index("idx_conv_summaries_conv", "conversation_id"),
     )
 
 
@@ -323,3 +338,33 @@ class AuthAudit(Base):
         Index("idx_auth_audit_type", "event_type", "created_at"),
         Index("idx_auth_audit_ip", "ip_address", "created_at"),
     )
+
+
+# ── Telegram Pairing Tables ────────────────────────────────────
+
+
+class TelegramPairing(Base):
+    __tablename__ = "telegram_pairings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_user_id = Column(String, nullable=False, unique=True)
+    telegram_username = Column(String, nullable=True)
+    telegram_first_name = Column(String, nullable=True)
+    conversation_id = Column(String, nullable=True)
+    paired_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    last_active = Column(DateTime(timezone=True), nullable=True)
+    active = Column(Boolean, nullable=False, default=True)
+
+    __table_args__ = (
+        Index("idx_tg_pairings_user", "telegram_user_id"),
+    )
+
+
+class PairingCode(Base):
+    __tablename__ = "pairing_codes"
+
+    code = Column(String(8), primary_key=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used = Column(Boolean, nullable=False, default=False)
+    used_by_telegram_id = Column(String, nullable=True)

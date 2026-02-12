@@ -1,0 +1,30 @@
+id: reminders
+name: Apple Reminders
+type: integration
+version: 1.0.0
+domain: productivity
+description: Create, list, and complete reminders in Apple Reminders
+author: nexus
+triggers:
+  keywords: [remind, reminder, reminders, remember]
+  patterns:
+    - "remind me.*"
+    - "create (a )?reminder.*"
+    - "(list|show) (my )?reminders.*"
+    - "set a reminder.*"
+actions:
+  - name: create_reminder
+    description: Create a new reminder
+    parameters:
+      title: Reminder text
+      list: Reminders list name (default Reminders)
+      due_date: Due date in natural format (optional)
+  - name: list_reminders
+    description: List reminders from a list
+    parameters:
+      list: Reminders list name (default Reminders)
+      limit: Max reminders to show (default 10)
+  - name: complete_reminder
+    description: Mark a reminder as complete
+    parameters:
+      title: Title of the reminder to complete

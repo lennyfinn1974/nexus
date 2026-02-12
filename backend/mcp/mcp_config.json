@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "nexus": {
+      "command": "python3",
+      "args": ["/Users/lennyfinn/Nexus/backend/mcp/nexus_mcp_server.py"],
+      "env": {
+        "NEXUS_URL": "http://localhost:8080"
+      }
+    }
+  }
+}

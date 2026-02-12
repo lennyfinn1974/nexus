@@ -8,6 +8,7 @@ import traceback
 import uuid
 from typing import Callable
 
+from core.logging_config import clear_request_context, set_request_context
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
@@ -26,6 +27,13 @@ class AuditMiddleware(BaseHTTPMiddleware):
         request.state.request_id = request_id
         start = time.monotonic()
 
+        # Set context for structured JSON logging
+        set_request_context(
+            request_id=request_id,
+            method=request.method,
+            path=str(request.url.path),
+        )
+
         try:
             response = await call_next(request)
         except Exception:
@@ -38,6 +46,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 request_id,
                 traceback.format_exc(),
             )
+            clear_request_context()
             raise
 
         duration_ms = (time.monotonic() - start) * 1000
@@ -53,4 +62,5 @@ class AuditMiddleware(BaseHTTPMiddleware):
             request.client.host if request.client else "unknown",
         )
         response.headers["X-Request-ID"] = request_id
+        clear_request_context()
         return response

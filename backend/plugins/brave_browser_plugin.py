@@ -58,62 +58,72 @@ class BraveBrowserPlugin(NexusPlugin):
             "Open a URL in Brave Browser (creates new tab)",
             {"url": "URL to open (include http:// or https://)"},
             self._brave_open,
+            category="web",
         )
         self.add_tool(
             "brave_get_url",
             "Get the current URL from the active Brave tab",
             {},
             self._brave_get_url,
+            category="web",
         )
         self.add_tool(
             "brave_get_title",
             "Get the page title from the active Brave tab",
             {},
             self._brave_get_title,
+            category="web",
         )
         self.add_tool(
             "brave_get_tabs",
             "List all open tabs in the frontmost Brave window",
             {},
             self._brave_get_tabs,
+            category="web",
         )
         self.add_tool(
             "brave_close_tab",
             "Close a tab by index (or close current tab if no index specified)",
             {"index": "Optional: tab index to close (1-based)"},
             self._brave_close_tab,
+            category="web",
         )
         self.add_tool(
             "brave_navigate",
             "Navigate the current tab (back, forward, or reload)",
             {"action": "Action: 'back', 'forward', or 'reload'"},
             self._brave_navigate,
+            category="web",
         )
         self.add_tool(
             "brave_execute_js",
             "Execute JavaScript code in the active Brave tab and return the result",
             {"code": "JavaScript code to execute"},
             self._brave_execute_js,
+            category="web",
         )
         self.add_tool(
             "brave_get_page_text",
-            "Extract all text content from the current page",
+            "Extract all text content from the current Brave tab (auto-falls back to HTTP fetch if JS is disabled)",
             {},
             self._brave_get_page_text,
+            category="web",
         )
 
         # ── Web Tools ──
         self.add_tool(
             "google_search",
-            "Search Google and return top results with titles, URLs, and snippets",
+            "Search the web and return top results with titles, URLs, and snippets. Use this to find information about any topic.",
             {"query": "Search query", "num_results": "Number of results to return (default: 5)"},
             self._google_search,
+            category="web",
         )
         self.add_tool(
             "web_fetch",
-            "Fetch a URL and extract its text content (removes HTML tags)",
+            "Fetch a URL directly via HTTP and extract its text content (reliable — works without browser). Best for reading web page content.",
             {"url": "URL to fetch"},
             self._web_fetch,
+            category="web",
         )
 
     def register_commands(self):
@@ -265,6 +275,9 @@ class BraveBrowserPlugin(NexusPlugin):
                 set jsResult to execute active tab of front window javascript "{code}"
                 return jsResult as string
             on error errMsg
+                if errMsg contains "JavaScript" and errMsg contains "Apple Events" then
+                    return "JavaScript error: AppleScript is turned off. Enable via View > Developer > Allow JavaScript from Apple Events in Brave."
+                end if
                 return "JavaScript error: " & errMsg
             end try
         end tell
@@ -278,14 +291,60 @@ class BraveBrowserPlugin(NexusPlugin):
         return f"JavaScript result:\n{result}"
 
     async def _brave_get_page_text(self, params):
-        # Use JavaScript to extract all text from the page
+        """Extract page text — tries JS first, falls back to web_fetch via httpx."""
+        # Try JavaScript extraction first (best quality — gets rendered content)
         js_code = "document.body.innerText"
         result = await self._brave_execute_js({"code": js_code})
 
-        if "No windows open" in result or "JavaScript error" in result:
-            return result
+        # Check if JS execution failed (AppleScript JS disabled, error, etc.)
+        js_failed = (
+            "No windows open" in result
+            or "JavaScript error" in result
+            or "AppleScript is turned off" in result
+            or "JavaScript through Apple" in result
+            or "execution error" in result.lower()
+        )
 
-        # Clean up the result
+        if js_failed:
+            # Fallback: get the current URL and page title, then fetch via httpx
+            logger.info("JS extraction failed, falling back to web_fetch (httpx)")
+            url_result = await self._brave_get_url(params)
+
+            if "No Brave windows" in url_result or "No windows" in url_result:
+                return "No Brave windows open"
+
+            # Extract URL from "Current URL: https://..."
+            url = url_result.replace("Current URL: ", "").strip()
+            if not url or not url.startswith("http"):
+                return f"Could not determine page URL for fallback fetch. JS error: {result}"
+
+            # Get page title via AppleScript (doesn't need JS permission)
+            title_result = await self._brave_get_title(params)
+            title = title_result.replace("Page title: ", "").strip() if "Page title:" in title_result else ""
+
+            # Use web_fetch as fallback
+            fetch_result = await self._web_fetch({"url": url})
+            if fetch_result.startswith("⚠️") or fetch_result.startswith("Error"):
+                return f"Could not extract page content.\nJS error: {result}\nFetch error: {fetch_result}"
+
+            # Check if the fetched content is very sparse (JS-heavy SPA)
+            # Strip the URL header line from fetch_result to measure actual content
+            content_lines = fetch_result.split("\n", 2)
+            raw_text = content_lines[2] if len(content_lines) > 2 else ""
+            if len(raw_text.strip()) < 200:
+                sparse_note = (
+                    f"\n\n⚠️ **Note:** This appears to be a JavaScript-heavy site. "
+                    f"The raw HTML has minimal text content. "
+                    f"Page title from browser: **{title}**\n"
+                    f"URL: {url}\n"
+                    f"To get full content, enable JavaScript from Apple Events in Brave: "
+                    f"View → Developer → Allow JavaScript from Apple Events."
+                )
+                return fetch_result + sparse_note
+
+            return fetch_result
+
+        # JS succeeded — clean up the result
         text = result.replace("JavaScript result:\n", "")
         if len(text) > 5000:
             text = text[:5000] + "\n\n... (truncated to 5000 chars)"
@@ -303,44 +362,101 @@ class BraveBrowserPlugin(NexusPlugin):
         if not query:
             return "Error: query is required"
 
-        if not self.google_api_key or not self.google_search_engine_id:
-            return "⚠️ Google Search API not configured. Set GOOGLE_API_KEY and GOOGLE_SEARCH_ENGINE_ID environment variables."
+        # Try Google Custom Search API first if configured
+        if self.google_api_key and self.google_search_engine_id:
+            try:
+                import httpx
 
+                url = "https://www.googleapis.com/customsearch/v1"
+                params_dict = {
+                    "key": self.google_api_key,
+                    "cx": self.google_search_engine_id,
+                    "q": query,
+                    "num": min(num_results, 10),
+                }
+
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.get(url, params=params_dict)
+                    response.raise_for_status()
+                    data = response.json()
+
+                items = data.get("items", [])
+                if items:
+                    lines = [f"🔍 **Google Search Results for '{query}':**\n"]
+                    for i, item in enumerate(items, 1):
+                        title = item.get("title", "No title")
+                        link = item.get("link", "")
+                        snippet = item.get("snippet", "")
+                        lines.append(f"{i}. **{title}**")
+                        lines.append(f"   {link}")
+                        lines.append(f"   {snippet}\n")
+                    return "\n".join(lines)
+            except Exception as e:
+                logger.warning(f"Google API search failed: {e}, falling back to DuckDuckGo")
+
+        # Fallback: DuckDuckGo HTML search (no API key needed)
+        return await self._duckduckgo_search(query, num_results)
+
+    async def _duckduckgo_search(self, query: str, num_results: int = 5) -> str:
+        """Search DuckDuckGo HTML (no API key required)."""
         try:
             import httpx
 
-            url = "https://www.googleapis.com/customsearch/v1"
-            params_dict = {
-                "key": self.google_api_key,
-                "cx": self.google_search_engine_id,
-                "q": query,
-                "num": min(num_results, 10),  # API max is 10
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
             }
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(url, params=params_dict)
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                response = await client.get(
+                    "https://html.duckduckgo.com/html/",
+                    params={"q": query},
+                    headers=headers,
+                )
                 response.raise_for_status()
-                data = response.json()
+                html = response.text
 
-            items = data.get("items", [])
-            if not items:
-                return f"No results found for: {query}"
+            # Parse results with regex (no BeautifulSoup dependency needed)
+            results = []
 
-            lines = [f"🔍 **Google Search Results for '{query}':**\n"]
-            for i, item in enumerate(items, 1):
-                title = item.get("title", "No title")
-                link = item.get("link", "")
-                snippet = item.get("snippet", "")
-                lines.append(f"{i}. **{title}**")
-                lines.append(f"   {link}")
-                lines.append(f"   {snippet}\n")
+            # Match DuckDuckGo result blocks
+            result_pattern = re.compile(
+                r'class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?'
+                r'class="result__snippet"[^>]*>(.*?)</(?:a|span|td)',
+                re.DOTALL,
+            )
+
+            for match in result_pattern.finditer(html):
+                href = match.group(1)
+                title = re.sub(r"<[^>]+>", "", match.group(2)).strip()
+                snippet = re.sub(r"<[^>]+>", "", match.group(3)).strip()
+
+                # DuckDuckGo wraps URLs in a redirect — extract real URL
+                if "uddg=" in href:
+                    import urllib.parse
+                    parsed = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
+                    href = parsed.get("uddg", [href])[0]
+
+                if title:
+                    results.append({"title": title, "url": href, "snippet": snippet})
+                if len(results) >= num_results:
+                    break
+
+            if not results:
+                return f"No search results found for: {query}"
+
+            lines = [f"🔍 **Search Results for '{query}':**\n"]
+            for i, r in enumerate(results, 1):
+                lines.append(f"{i}. **{r['title']}**")
+                lines.append(f"   {r['url']}")
+                if r["snippet"]:
+                    lines.append(f"   {r['snippet']}\n")
 
             return "\n".join(lines)
 
         except ImportError:
             return "Error: httpx not installed. Run: pip install httpx"
         except Exception as e:
-            return f"Google Search error: {e}"
+            return f"Search error: {e}"
 
     async def _web_fetch(self, params):
         url = params.get("url", "").strip()

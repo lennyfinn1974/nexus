@@ -1,0 +1,21 @@
+author: vibeship-spawner-skills (Apache 2.0)
+description: 'Expert in building Retrieval-Augmented Generation systems. Masters embedding
+  models, vector databases, chunking strategies, and retrieval optimization for LLM
+  applications. Use when: building RAG, vec'
+domain: uncategorized
+id: rag-engineer
+name: rag-engineer
+triggers:
+  keywords:
+  - rag
+  - engineer
+  - rag engineer
+  - expert
+  - building
+  - retrieval
+  - augmented
+  - generation
+  - systems
+  - masters
+type: knowledge
+version: '1.0'

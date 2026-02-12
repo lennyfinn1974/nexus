@@ -65,6 +65,7 @@ class QMDPlugin(NexusPlugin):
                 "limit": "Maximum number of results (default: 5)",
             },
             self._doc_search,
+            category="knowledge",
         )
 
         self.add_tool(
@@ -72,6 +73,7 @@ class QMDPlugin(NexusPlugin):
             "Retrieve a specific document by its path or document ID.",
             {"path_or_docid": "Document path or ID to retrieve"},
             self._doc_get,
+            category="knowledge",
         )
 
         self.add_tool(
@@ -82,6 +84,7 @@ class QMDPlugin(NexusPlugin):
                 "name": "Optional: collection name (default: uses path basename)",
             },
             self._doc_index,
+            category="knowledge",
         )
 
         self.add_tool(
@@ -89,6 +92,7 @@ class QMDPlugin(NexusPlugin):
             "List all indexed document collections.",
             {},
             self._doc_list_collections,
+            category="knowledge",
         )
 
     def register_commands(self) -> None:

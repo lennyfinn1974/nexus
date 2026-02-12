@@ -1,0 +1,30 @@
+id: things-mac
+name: Things 3 Task Manager
+type: integration
+version: 1.0.0
+domain: productivity
+description: Create, list, and complete tasks in Things 3 for Mac
+author: nexus
+triggers:
+  keywords: [todo, task, things, to-do, reminder, checklist]
+  patterns:
+    - "create (a )?(todo|task).*"
+    - "(list|show) (my )?(todos|tasks).*"
+    - "complete (todo|task).*"
+    - "add to things.*"
+actions:
+  - name: create_todo
+    description: Create a new to-do in Things 3
+    parameters:
+      title: Task title
+      notes: Additional notes (optional)
+      list: Things list/project name (optional)
+      when: Due date — today, tomorrow, evening, or date string (optional)
+  - name: list_todos
+    description: List to-dos from Things 3
+    parameters:
+      list: List name — inbox, today, upcoming, anytime (default today)
+  - name: complete_todo
+    description: Mark a to-do as complete
+    parameters:
+      title: Title of the to-do to complete

@@ -37,21 +37,30 @@ SIMPLE_INDICATORS = [
 
 
 class ModelRouter:
-    """Routes requests to the appropriate model based on complexity."""
+    """Routes requests to the appropriate model based on complexity.
+
+    Supports three providers:
+      - **ollama** — local model via Ollama (primary, always tried first)
+      - **claude** — Anthropic Claude API (fallback for complex tasks)
+      - **claude_code** — Claude Code CLI with MCP tools (agentic tasks)
+    """
 
     def __init__(
         self,
         ollama: OllamaClient | None,
         claude: ClaudeClient | None,
+        claude_code: Any | None = None,
         complexity_threshold: int = 60,
         timeout_seconds: int = 30,
     ):
         self.ollama = ollama
         self.claude = claude
+        self.claude_code = claude_code
         self.complexity_threshold = complexity_threshold
         self.timeout_seconds = timeout_seconds
         self._ollama_available = False
         self._claude_available = False
+        self._claude_code_available = False
 
     async def check_availability(self) -> None:
         """Check which models are available."""
@@ -61,14 +70,26 @@ class ModelRouter:
         if self.claude:
             self._claude_available = await self.claude.is_available()
             logger.info(f"Claude available: {self._claude_available}")
+        if self.claude_code:
+            self._claude_code_available = await self.claude_code.is_available()
+            logger.info(f"Claude Code available: {self._claude_code_available}")
 
-        if not self._ollama_available and not self._claude_available:
+        if not self._ollama_available and not self._claude_available and not self._claude_code_available:
             logger.error("No models available! Check Ollama and Anthropic API key.")
 
-    def estimate_complexity(self, message: str) -> int:
-        """Estimate message complexity on a 0-100 scale."""
+    def estimate_complexity(self, message: str, context: list[dict] | None = None) -> int:
+        """Estimate message complexity on a 0-100 scale.
+
+        Enhanced routing considers:
+        1. Content patterns (regex-based)
+        2. Message length
+        3. Conversation context (multi-turn complexity)
+        4. Tool requirements (agentic indicators)
+        5. Code density
+        """
         score = 50
 
+        # ── Pattern matching ──
         for pattern in COMPLEX_INDICATORS:
             if re.search(pattern, message, re.IGNORECASE):
                 score += 8
@@ -77,6 +98,7 @@ class ModelRouter:
             if re.search(pattern, message, re.IGNORECASE):
                 score -= 12
 
+        # ── Length analysis ──
         word_count = len(message.split())
         if word_count > 200:
             score += 15
@@ -88,22 +110,75 @@ class ModelRouter:
         if message.count("?") > 2:
             score += 10
 
+        # ── Code density (code blocks suggest coding task) ──
+        code_blocks = message.count("```")
+        if code_blocks >= 2:
+            score += 12  # Contains code — likely needs reasoning
+
+        # ── Agentic indicators (suggests Claude Code) ──
+        agentic_patterns = [
+            r"\b(run|execute|install|deploy|test)\b.*\b(command|script|server|pipeline)\b",
+            r"\b(browse|navigate|open|visit)\b.*\b(website|page|url|link)\b",
+            r"\b(search|find|look|scan)\b.*\b(file|directory|folder|web)\b",
+            r"\b(create|edit|modify|update|delete)\b.*\b(file|folder|database|table)\b",
+            r"\b(git|npm|pip|docker|brew)\b",
+            r"/sov\b|/exec\b|/learn\b",
+        ]
+        agentic_score = sum(
+            1 for p in agentic_patterns if re.search(p, message, re.IGNORECASE)
+        )
+        if agentic_score >= 2:
+            score += 15  # Strongly agentic
+
+        # ── Conversation context analysis ──
+        if context:
+            # Long conversations tend to be more complex
+            if len(context) > 10:
+                score += 5
+            if len(context) > 20:
+                score += 5
+
+            # If recent messages contain tool results, complexity rises
+            recent = context[-4:] if len(context) > 4 else context
+            tool_mentions = sum(
+                1 for m in recent
+                if any(kw in m.get("content", "").lower()
+                       for kw in ["tool_result", "function_call", "error:", "traceback"])
+            )
+            score += tool_mentions * 5
+
+            # If user keeps asking follow-ups on same topic, stay on same tier
+            if len(context) >= 2:
+                prev_content = context[-2].get("content", "")
+                if len(prev_content) > 500 and word_count < 30:
+                    # Short follow-up to long context — keep it local
+                    score -= 8
+
         return max(0, min(100, score))
 
-    def select_model(self, message: str, force_model: str | None = None) -> str:
-        """Select which model to use. Returns 'claude' or 'ollama'."""
+    def select_model(
+        self,
+        message: str,
+        force_model: str | None = None,
+        context: list[dict] | None = None,
+    ) -> str:
+        """Select which model to use. Returns 'claude', 'ollama', or 'claude_code'."""
         if force_model:
             if force_model == "claude" and self._claude_available:
                 return "claude"
             elif force_model in ("ollama", "local") and self._ollama_available:
                 return "ollama"
+            elif force_model == "claude_code" and self._claude_code_available:
+                return "claude_code"
 
-        complexity = self.estimate_complexity(message)
+        complexity = self.estimate_complexity(message, context=context)
         logger.info(f"Complexity score: {complexity}/{self.complexity_threshold}")
 
         if complexity >= self.complexity_threshold:
             if self._claude_available:
                 return "claude"
+            elif self._claude_code_available:
+                return "claude_code"
             elif self._ollama_available:
                 logger.warning("Claude unavailable, falling back to Ollama for complex task")
                 return "ollama"
@@ -113,12 +188,16 @@ class ModelRouter:
             elif self._claude_available:
                 logger.info("Ollama unavailable, using Claude for simple task")
                 return "claude"
+            elif self._claude_code_available:
+                return "claude_code"
 
         raise RuntimeError("No models are currently available")
 
-    def _get_client(self, model_name: str) -> ClaudeClient | OllamaClient:
+    def _get_client(self, model_name: str):
         if model_name == "claude":
             return self.claude
+        elif model_name == "claude_code":
+            return self.claude_code
         return self.ollama
 
     async def chat(
@@ -184,10 +263,13 @@ class ModelRouter:
 
     @property
     def status(self) -> dict:
-        return {
+        s = {
             "ollama_available": self._ollama_available,
             "claude_available": self._claude_available,
+            "claude_code_available": self._claude_code_available,
             "ollama_model": self.ollama.model if self.ollama else None,
             "claude_model": self.claude.model if self.claude else None,
+            "claude_code_model": self.claude_code.model if self.claude_code else None,
             "complexity_threshold": self.complexity_threshold,
         }
+        return s

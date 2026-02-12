@@ -22,6 +22,7 @@ class ToolDefinition(BaseModel):
     plugin: str
     description: str = ""
     parameters: list[ToolParameter] = Field(default_factory=list)
+    category: str = "general"
 
     def to_anthropic_format(self) -> dict:
         """Convert to Anthropic API tool format."""

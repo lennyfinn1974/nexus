@@ -40,13 +40,45 @@ class ToolExecutor:
                         plugin=plugin_name,
                         description=tool.description,
                         parameters=params,
+                        category=getattr(tool, "category", "general"),
                     )
                 )
 
-        # Skill actions
+        # Skill actions — assign category based on skill domain
+        _DOMAIN_TO_CATEGORY = {
+            # Web / search
+            "search": "web",
+            "web": "web",
+            "browser": "web",
+            "research": "web",
+            "utilities": "web",  # weather, etc.
+            # System / macOS / productivity
+            "system": "system",
+            "macos": "system",
+            "productivity": "system",  # calendar, reminders, notes, things
+            "communication": "system",
+            "ai": "system",  # ollama manager
+            # Files
+            "files": "files",
+            # Code / development
+            "code": "code",
+            "development": "code",
+            # Memory
+            "memory": "memory",
+            # Knowledge / docs
+            "knowledge": "knowledge",
+            "docs": "knowledge",
+            # Workspace
+            "workspace": "workspace",
+            "project": "workspace",
+            # Fallback
+            "general": "general",
+            "uncategorized": "general",
+        }
         for skill in self.skills_engine.skills.values():
             if not skill.is_configured(self.skills_engine.config) if self.skills_engine.config else False:
                 continue
+            skill_category = _DOMAIN_TO_CATEGORY.get(skill.domain, "general")
             for action in skill.actions:
                 params = []
                 for pname, pdesc in action.parameters.items():
@@ -64,6 +96,7 @@ class ToolExecutor:
                         plugin=f"skill_{skill.id}",
                         description=action.description,
                         parameters=params,
+                        category=skill_category,
                     )
                 )
 
@@ -73,9 +106,46 @@ class ToolExecutor:
         """Convert all tool definitions to Anthropic API format."""
         return [d.to_anthropic_format() for d in self.get_tool_definitions()]
 
-    def to_ollama_tools(self) -> list[dict]:
-        """Convert all tool definitions to Ollama/OpenAI format."""
-        return [d.to_ollama_format() for d in self.get_tool_definitions()]
+    def to_ollama_tools(
+        self,
+        message: str | None = None,
+        boost_skill_ids: list[str] | None = None,
+    ) -> list[dict]:
+        """Convert tool definitions to Ollama/OpenAI format.
+
+        When *message* is provided, uses intelligent filtering to return
+        only the 10-15 most relevant tools (for Ollama).
+        Without *message*, returns all tools (Claude compatibility).
+
+        *boost_skill_ids* forces inclusion of tool definitions from those
+        skills even if ToolSelector would otherwise filter them out.
+        This ensures @skill-name invocations always have their actions available.
+        """
+        all_defs = self.get_tool_definitions()
+
+        if message:
+            from core.tool_selector import ToolSelector
+
+            selector = ToolSelector(all_defs)
+            defs = selector.select_tools(message, max_tools=15)
+
+            # Boost: ensure @skill actions are included
+            if boost_skill_ids:
+                selected_names = {d.name for d in defs}
+                for defn in all_defs:
+                    if defn.name not in selected_names:
+                        # Check if this definition belongs to a boosted skill
+                        for sid in boost_skill_ids:
+                            if defn.plugin == f"skill_{sid}":
+                                defs.append(defn)
+                                selected_names.add(defn.name)
+                                logger.info(
+                                    f"Boosted @skill action into tool set: {defn.name}"
+                                )
+                                break
+        else:
+            defs = all_defs
+        return [d.to_ollama_format() for d in defs]
 
     async def execute(self, tool_call: ToolCall) -> ToolResult:
         """Execute a single tool call with security checks."""

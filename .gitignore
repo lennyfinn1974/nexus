@@ -24,3 +24,12 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Node
+node_modules/
+admin-ui/node_modules/
+chat-ui/node_modules/
+
+# Build output
+frontend/admin-build/
+frontend/chat-build/

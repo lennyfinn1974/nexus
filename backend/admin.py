@@ -1,10 +1,14 @@
 """Admin API — settings, plugins, system management, and log streaming."""
 
+from __future__ import annotations
+
 import asyncio
 import ipaddress
 import json
 import logging
 import os
+import shutil
+import subprocess
 from collections import deque
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -38,9 +42,16 @@ async def require_admin(
     if user and user.get("role") == "admin":
         return
 
-    # Legacy fallback: ADMIN_API_KEY bearer token
-    expected = os.environ.get("ADMIN_API_KEY", "")
-    if expected and credentials and credentials.credentials == expected:
+    # Legacy fallback: ADMIN_API_KEY bearer token (env var)
+    env_key = os.environ.get("ADMIN_API_KEY", "")
+    if env_key and credentials and credentials.credentials == env_key:
+        return
+
+    # DB-backed admin access key (set via Admin Console settings)
+    db_key = ""
+    if _cfg:
+        db_key = _cfg.admin_access_key if hasattr(_cfg, "admin_access_key") else ""
+    if db_key and credentials and credentials.credentials == db_key:
         return
 
     # If auth is enabled, also try JWT from bearer header directly
@@ -59,6 +70,12 @@ async def require_admin(
                 request.state.user = claims
                 return
 
+    # Open access: if no auth keys are configured at all, allow access.
+    # This handles first-boot / local-only setups where no key has been set yet.
+    auth_enabled = _cfg.auth_enabled if _cfg else False
+    if not auth_enabled and not env_key and not db_key:
+        return
+
     raise HTTPException(status_code=401, detail="Admin access required")
 
 
@@ -75,6 +92,8 @@ _models = None  # ModelRouter
 _skills = None  # SkillsEngine
 _db = None  # Database
 _task_queue = None  # TaskQueue
+_catalog = None  # SkillCatalog
+_work_registry = None  # WorkRegistry
 
 # In-memory log buffer for streaming
 _log_buffer: deque = deque(maxlen=500)
@@ -113,10 +132,12 @@ def init(
     user_manager=None,
     ip_security=None,
     audit_log=None,
+    skill_catalog=None,
+    work_registry=None,
 ):
     """Called from app.py during startup."""
     global _cfg, _plugins, _models, _db, _task_queue, _skills
-    global _jwt_manager, _user_manager, _ip_security, _audit_log
+    global _jwt_manager, _user_manager, _ip_security, _audit_log, _catalog, _work_registry
     _cfg = config_manager
     _plugins = plugin_manager
     _models = model_router
@@ -127,6 +148,8 @@ def init(
     _user_manager = user_manager
     _ip_security = ip_security
     _audit_log = audit_log
+    _catalog = skill_catalog
+    _work_registry = work_registry
 
     # Attach log handler to root logger
     handler = AdminLogHandler()
@@ -189,8 +212,11 @@ def validate_url(url: str) -> str:
     return url
 
 
-# URL-type settings that must pass SSRF validation on save
-_URL_SETTINGS = {"OLLAMA_BASE_URL"}
+# URL-type settings that must pass SSRF validation on save (external services only)
+_URL_SETTINGS: set[str] = set()  # Add external URL settings here if needed
+
+# URL settings that allow localhost/private addresses (local services like Ollama)
+_LOCAL_URL_SETTINGS = {"OLLAMA_BASE_URL"}
 
 
 # ── Settings ────────────────────────────────────────────────────
@@ -213,12 +239,25 @@ async def update_settings(request: Request):
     for key, value in updates.items():
         if "..." in str(value):
             continue  # masked — user didn't change it
-        # Validate URL-type settings against SSRF
+        # Validate external URL-type settings against SSRF
         if key in _URL_SETTINGS and value:
             try:
                 validate_url(str(value))
             except ValueError as e:
                 return JSONResponse({"error": f"Invalid URL for {key}: {e}"}, status_code=400)
+        # Validate local URL settings (lighter check — allow localhost/private)
+        if key in _LOCAL_URL_SETTINGS and value:
+            parsed = urlparse(str(value))
+            if parsed.scheme not in ("http", "https"):
+                return JSONResponse(
+                    {"error": f"Invalid URL for {key}: scheme must be http or https"},
+                    status_code=400,
+                )
+            if not parsed.hostname:
+                return JSONResponse(
+                    {"error": f"Invalid URL for {key}: no hostname"},
+                    status_code=400,
+                )
         clean[key] = value
 
     changed = await _cfg.set_many(clean, changed_by="admin")
@@ -255,7 +294,7 @@ async def test_setting(key: str):
 
     elif key == "OLLAMA_BASE_URL":
         try:
-            base_url = validate_url(_cfg.ollama_base_url)
+            base_url = _cfg.ollama_base_url  # Local service — skip SSRF check
             import httpx
 
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -303,7 +342,18 @@ async def get_models():
             "ollama_available": status["ollama_available"],
             "claude_model": _cfg.claude_model,
             "claude_available": status["claude_available"],
+            "claude_code_available": status.get("claude_code_available", False),
+            "claude_code_model": status.get("claude_code_model"),
+            "claude_code_enabled": _cfg.get_bool("CLAUDE_CODE_ENABLED", False),
             "complexity_threshold": _cfg.complexity_threshold,
+            # Sub-agent settings
+            "sub_agent_enabled": _cfg.get_bool("SUB_AGENT_ENABLED", True),
+            "sub_agent_auto_enabled": _cfg.get_bool("SUB_AGENT_AUTO_ENABLED", False),
+            "sub_agent_max_concurrent": _cfg.get_int("SUB_AGENT_MAX_CONCURRENT", 4),
+            "sub_agent_cc_concurrent": _cfg.get_int("SUB_AGENT_CLAUDE_CODE_CONCURRENT", 2),
+            "sub_agent_builder_model": _cfg.get("SUB_AGENT_BUILDER_MODEL") or "",
+            "sub_agent_reviewer_model": _cfg.get("SUB_AGENT_REVIEWER_MODEL") or "claude",
+            "sub_agent_timeout": _cfg.get_int("SUB_AGENT_TIMEOUT", 120),
         }
     )
 
@@ -312,7 +362,7 @@ async def get_models():
 async def list_ollama_models():
     """Fetch available models from the connected Ollama instance."""
     try:
-        base_url = validate_url(_cfg.ollama_base_url)
+        base_url = _cfg.ollama_base_url  # Local service — skip SSRF check
         import httpx
 
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -491,6 +541,98 @@ async def delete_all_conversations(request: Request):
     return JSONResponse({"deleted": count})
 
 
+# ── Conversation Export ───────────────────────────────────────
+
+
+@router.get("/conversations/{conv_id}/export")
+async def export_conversation(conv_id: str, format: str = "markdown"):
+    """Export a single conversation as Markdown or JSON.
+
+    Query params:
+        format: "markdown" (default) or "json"
+    """
+    conv = await _db.get_conversation(conv_id)
+    if not conv:
+        raise HTTPException(404, "Conversation not found")
+
+    messages = await _db.get_conversation_messages(conv_id, limit=9999)
+    summary = await _db.get_conversation_summary(conv_id)
+
+    if format == "json":
+        export_data = {
+            "conversation": conv,
+            "summary": summary,
+            "messages": messages,
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+        }
+        content = json.dumps(export_data, indent=2, default=str)
+        filename = f"{conv_id}.json"
+        media_type = "application/json"
+    else:
+        # Markdown format
+        lines = [f"# {conv.get('title', 'Untitled Conversation')}\n"]
+        lines.append(f"**ID:** {conv_id}  ")
+        lines.append(f"**Created:** {conv.get('created_at', 'N/A')}  ")
+        lines.append(f"**Updated:** {conv.get('updated_at', 'N/A')}\n")
+        if summary:
+            lines.append("## Summary\n")
+            lines.append(f"{summary}\n")
+        lines.append("## Messages\n")
+        for msg in messages:
+            role = msg.get("role", "unknown").capitalize()
+            model = msg.get("model_used", "")
+            ts = msg.get("created_at", "")
+            model_tag = f" *({model})*" if model else ""
+            lines.append(f"### {role}{model_tag}")
+            lines.append(f"*{ts}*\n")
+            lines.append(f"{msg.get('content', '')}\n")
+            lines.append("---\n")
+        content = "\n".join(lines)
+        filename = f"{conv_id}.md"
+        media_type = "text/markdown"
+
+    return StreamingResponse(
+        iter([content]),
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/conversations/export-all")
+async def export_all_conversations(format: str = "json"):
+    """Export all conversations as a single JSON file.
+
+    Returns a downloadable JSON with all conversations, their messages,
+    and summaries bundled together.
+    """
+    convs = await _db.list_conversations(limit=9999)
+    all_data = []
+    for conv in convs:
+        messages = await _db.get_conversation_messages(conv["id"], limit=9999)
+        summary = await _db.get_conversation_summary(conv["id"])
+        all_data.append({
+            "conversation": conv,
+            "summary": summary,
+            "message_count": len(messages),
+            "messages": messages,
+        })
+
+    export = {
+        "nexus_export": True,
+        "version": "1.0",
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "conversation_count": len(all_data),
+        "conversations": all_data,
+    }
+    content = json.dumps(export, indent=2, default=str)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return StreamingResponse(
+        iter([content]),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="nexus_export_{ts}.json"'},
+    )
+
+
 # ── Logs (SSE stream) ──────────────────────────────────────────
 
 
@@ -521,6 +663,92 @@ async def stream_logs():
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ── Work Streams ──────────────────────────────────────────────────
+
+
+@router.get("/workstreams")
+async def list_workstreams(status: str = None, kind: str = None):
+    """List work items with optional filters."""
+    items = []
+    if _work_registry:
+        active = _work_registry.get_all_active()
+        if status or kind:
+            items = [
+                i for i in active
+                if (not status or i.get("status") == status)
+                and (not kind or i.get("kind") == kind)
+            ]
+        else:
+            items = list(active)
+
+    # Also fetch recent terminal items from DB for the "done" columns
+    if _db and not status:
+        try:
+            db_items = await _db.list_work_items(limit=50)
+            active_ids = {i["id"] for i in items}
+            for di in db_items:
+                if di["id"] not in active_ids:
+                    items.append(di)
+        except Exception:
+            pass
+
+    return JSONResponse(items)
+
+
+@router.get("/workstreams/counts")
+async def workstream_counts():
+    """Get summary counts by status."""
+    if _work_registry:
+        counts = _work_registry.get_counts()
+    else:
+        counts = {"pending": 0, "running": 0, "completed": 0, "failed": 0, "cancelled": 0, "total": 0}
+    return JSONResponse(counts)
+
+
+@router.get("/workstreams/stream")
+async def stream_workstreams():
+    """SSE endpoint for real-time work item updates."""
+    if not _work_registry:
+        return JSONResponse({"error": "Work registry not initialized"}, status_code=500)
+
+    queue = _work_registry.subscribe_sse()
+
+    async def event_generator():
+        try:
+            # Send initial snapshot of all active items
+            initial = _work_registry.get_all_active()
+            yield f"data: {json.dumps({'type': 'snapshot', 'items': initial})}\n\n"
+            while True:
+                event = await queue.get()
+                yield f"data: {json.dumps(event)}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            _work_registry.unsubscribe_sse(queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/workstreams/{item_id}")
+async def get_workstream(item_id: str):
+    """Get a single work item with children."""
+    item = _work_registry.get(item_id) if _work_registry else None
+    if not item and _db:
+        try:
+            db_items = await _db.list_work_items(limit=1)
+            item = next((i for i in db_items if i["id"] == item_id), None)
+        except Exception:
+            pass
+    if not item:
+        return JSONResponse({"error": "Work item not found"}, status_code=404)
+    children = _work_registry.get_children(item_id) if _work_registry else []
+    return JSONResponse({"item": item, "children": children})
 
 
 # ── System ──────────────────────────────────────────────────────
@@ -559,14 +787,94 @@ async def get_system_info():
     )
 
 
+def _find_pg_dump() -> str | None:
+    """Locate the pg_dump binary."""
+    # Check PATH first
+    pg_dump = shutil.which("pg_dump")
+    if pg_dump:
+        return pg_dump
+    # Well-known Homebrew locations
+    for candidate in [
+        "/opt/homebrew/opt/postgresql@17/bin/pg_dump",
+        "/opt/homebrew/opt/postgresql@16/bin/pg_dump",
+        "/opt/homebrew/opt/postgresql@15/bin/pg_dump",
+        "/opt/homebrew/bin/pg_dump",
+        "/usr/local/bin/pg_dump",
+    ]:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def _parse_db_url() -> dict:
+    """Parse DATABASE_URL into components for pg_dump."""
+    url = os.getenv("DATABASE_URL", "")
+    # Strip asyncpg driver prefix: postgresql+asyncpg://... -> postgresql://...
+    url = url.replace("+asyncpg", "").replace("+psycopg2", "")
+    parsed = urlparse(url)
+    return {
+        "host": parsed.hostname or "localhost",
+        "port": str(parsed.port or 5432),
+        "user": parsed.username or "",
+        "dbname": parsed.path.lstrip("/") or "nexus",
+        "password": parsed.password or "",
+    }
+
+
 @router.post("/backup")
 async def create_backup():
-    return JSONResponse(
-        {
-            "error": "Backup is managed by Supabase. Use the Supabase dashboard " "or pg_dump for PostgreSQL backups.",
-        },
-        status_code=400,
-    )
+    pg_dump = _find_pg_dump()
+    if not pg_dump:
+        raise HTTPException(500, "pg_dump not found. Install PostgreSQL client tools.")
+
+    backup_dir = os.path.join(_cfg.data_dir, "backups")
+    os.makedirs(backup_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"nexus_backup_{timestamp}.sql"
+    filepath = os.path.join(backup_dir, filename)
+
+    db_info = _parse_db_url()
+
+    cmd = [
+        pg_dump,
+        "-h", db_info["host"],
+        "-p", db_info["port"],
+        "-d", db_info["dbname"],
+        "--no-owner",
+        "--no-privileges",
+        "-f", filepath,
+    ]
+    if db_info["user"]:
+        cmd.extend(["-U", db_info["user"]])
+
+    env = dict(os.environ)
+    if db_info["password"]:
+        env["PGPASSWORD"] = db_info["password"]
+
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run, cmd, capture_output=True, text=True, timeout=120, env=env,
+        )
+        if result.returncode != 0:
+            # Clean up failed backup file
+            if os.path.exists(filepath):
+                os.remove(filepath)
+            logger.error(f"pg_dump failed: {result.stderr}")
+            raise HTTPException(500, f"pg_dump failed: {result.stderr[:200]}")
+    except subprocess.TimeoutExpired:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+        raise HTTPException(500, "Backup timed out after 120 seconds.")
+
+    size_mb = round(os.path.getsize(filepath) / 1048576, 2)
+    logger.info(f"Backup created: {filename} ({size_mb} MB)")
+
+    return JSONResponse({
+        "path": filepath,
+        "size_mb": size_mb,
+        "timestamp": timestamp,
+    })
 
 
 @router.get("/backups")
@@ -576,7 +884,7 @@ async def list_backups():
         return JSONResponse([])
     backups = []
     for f in sorted(os.listdir(backup_dir), reverse=True):
-        if f.endswith(".db"):
+        if f.endswith((".sql", ".db")):
             path = os.path.join(backup_dir, f)
             backups.append(
                 {
@@ -683,6 +991,103 @@ async def get_skill_config(skill_id: str):
             "configured": skill.is_configured(_cfg) if _cfg else True,
         }
     )
+
+
+# ── Skill Catalog ──────────────────────────────────────────────
+
+
+@router.get("/catalog/search")
+async def catalog_search(q: str = "", category: str = "", limit: int = 20):
+    """Search the skill catalog (anti-gravity, etc.)."""
+    if not _catalog:
+        return JSONResponse({"results": [], "total": 0})
+    results = _catalog.search(q, category=category or None, limit=limit)
+    return JSONResponse({"results": results, "total": len(results)})
+
+
+@router.get("/catalog/categories")
+async def catalog_categories():
+    """List skill catalog categories with counts."""
+    if not _catalog:
+        return JSONResponse([])
+    return JSONResponse(_catalog.list_categories())
+
+
+@router.get("/catalog/stats")
+async def catalog_stats():
+    """Get catalog summary statistics."""
+    if not _catalog:
+        return JSONResponse({"total": 0, "sources": 0, "categories": 0})
+    return JSONResponse({
+        "total": len(_catalog.index),
+        "sources": len(_catalog.sources),
+        "categories": len(_catalog.list_categories()),
+        "source_dirs": _catalog.sources,
+    })
+
+
+@router.get("/catalog/{skill_id}")
+async def catalog_detail(skill_id: str):
+    """Get full detail for a catalog skill."""
+    if not _catalog:
+        raise HTTPException(404, "Catalog not available")
+    detail = _catalog.get_skill_detail(skill_id)
+    if not detail:
+        raise HTTPException(404, f"Skill '{skill_id}' not found in catalog")
+    return JSONResponse(detail)
+
+
+@router.post("/catalog/{skill_id}/install")
+async def catalog_install(skill_id: str):
+    """Install a skill from the catalog into Nexus."""
+    if not _catalog or not _skills:
+        raise HTTPException(500, "Catalog or skills engine not available")
+
+    entry = _catalog.get_by_id(skill_id)
+    if not entry:
+        raise HTTPException(404, f"Skill '{skill_id}' not found in catalog")
+
+    if entry.get("installed"):
+        return JSONResponse({"success": True, "message": f"Skill '{skill_id}' is already installed"})
+
+    try:
+        from skills.converter import convert_antigravity_skill
+
+        dest_dir = os.path.join(_skills.skills_dir, skill_id)
+        manifest = convert_antigravity_skill(
+            source_dir=entry["source_path"],
+            dest_dir=dest_dir,
+            category=entry.get("category", "general"),
+            skill_id=skill_id,
+        )
+
+        # Hot-load the new skill
+        from skills.engine import Skill
+
+        skill = Skill(dest_dir, manifest)
+        _skills._load_actions(skill)
+        _skills.skills[skill_id] = skill
+
+        # Save to DB
+        await _db.save_skill(
+            skill_id,
+            manifest["name"],
+            manifest.get("description", ""),
+            manifest.get("domain", "general"),
+            os.path.join(dest_dir, "knowledge.md"),
+        )
+
+        # Update catalog installed status
+        _catalog.refresh_installed()
+
+        return JSONResponse({
+            "success": True,
+            "message": f"Installed skill: {manifest['name']}",
+            "skill": manifest,
+        })
+    except Exception as e:
+        logger.error(f"Failed to install catalog skill '{skill_id}': {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ── User Management ──────────────────────────────────────────
@@ -836,6 +1241,28 @@ async def list_sessions(user_id: str):
     if not _jwt_manager:
         return JSONResponse([])
     return JSONResponse(await _jwt_manager.list_user_sessions(user_id))
+
+
+@router.post("/setup/complete")
+async def complete_setup(request: Request):
+    """Mark initial setup as complete.
+
+    Called at the end of the onboarding wizard after admin key and
+    at least one model have been configured.
+    """
+    body = await request.json()
+    admin_key = body.get("admin_key", "")
+    if not admin_key:
+        return JSONResponse({"error": "admin_key is required"}, status_code=400)
+
+    # Save the admin access key
+    await _cfg.set_many(
+        {"ADMIN_ACCESS_KEY": admin_key, "SETUP_COMPLETE": "true"},
+        changed_by="setup-wizard",
+    )
+    logger.info("Setup wizard completed — admin key set, SETUP_COMPLETE=true")
+    agent_name = _cfg.agent_name if _cfg else "Nexus"
+    return JSONResponse({"success": True, "message": f"Setup complete. Welcome to {agent_name}!"})
 
 
 @router.delete("/sessions/{session_id}")

@@ -1,0 +1,23 @@
+id: weather
+name: Weather Lookup
+type: integration
+version: 1.0.0
+domain: utilities
+description: Get current weather and forecasts for any location using wttr.in
+author: nexus
+triggers:
+  keywords: [weather, forecast, temperature, rain, wind, sunny, cloudy, humidity]
+  patterns:
+    - "weather in .*"
+    - "forecast for .*"
+    - "what's the weather.*"
+    - "is it (raining|sunny|cold|hot|warm).*"
+actions:
+  - name: get_weather
+    description: Get current weather for a location
+    parameters:
+      location: City name or location string
+  - name: get_forecast
+    description: Get 3-day weather forecast for a location
+    parameters:
+      location: City name or location string

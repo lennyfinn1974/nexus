@@ -38,12 +38,14 @@ class TerminalPlugin(NexusPlugin):
             "List all Terminal.app windows with their tabs",
             {},
             self._terminal_list_windows,
+            category="code",
         )
         self.add_tool(
             "terminal_read",
             "Read the output from a Terminal window (or current window if no ID specified)",
             {"window_id": "Optional: window ID to read from (1-based index)"},
             self._terminal_read,
+            category="code",
         )
         self.add_tool(
             "terminal_execute",
@@ -53,18 +55,21 @@ class TerminalPlugin(NexusPlugin):
                 "window_id": "Optional: window ID to execute in (defaults to current window)",
             },
             self._terminal_execute,
+            category="code",
         )
         self.add_tool(
             "terminal_new_window",
             "Open a new Terminal window, optionally running a command",
             {"command": "Optional: command to run in the new window"},
             self._terminal_new_window,
+            category="code",
         )
         self.add_tool(
             "terminal_new_tab",
             "Open a new Terminal tab in the current window, optionally running a command",
             {"command": "Optional: command to run in the new tab"},
             self._terminal_new_tab,
+            category="code",
         )
 
         # ── tmux Control ──
@@ -73,24 +78,28 @@ class TerminalPlugin(NexusPlugin):
             "List all tmux sessions with their windows",
             {},
             self._tmux_list_sessions,
+            category="code",
         )
         self.add_tool(
             "tmux_send",
             "Send a command to a tmux session (types the command and presses Enter)",
             {"session": "Session name or index", "command": "Command to send"},
             self._tmux_send,
+            category="code",
         )
         self.add_tool(
             "tmux_capture",
             "Capture the visible output from a tmux session/pane",
             {"session": "Session name or index"},
             self._tmux_capture,
+            category="code",
         )
         self.add_tool(
             "tmux_new_session",
             "Create a new tmux session, optionally running a command",
             {"name": "Session name", "command": "Optional: command to run in the session"},
             self._tmux_new_session,
+            category="code",
         )
 
         # ── Claude Code Control ──
@@ -99,24 +108,28 @@ class TerminalPlugin(NexusPlugin):
             "Start a new Claude Code session with a prompt",
             {"prompt": "Initial prompt for Claude", "directory": "Optional: working directory (default: current dir)"},
             self._claude_code_new,
+            category="code",
         )
         self.add_tool(
             "claude_code_send",
             "Send a message to an existing Claude Code session",
             {"session_name": "Session name or identifier", "message": "Message to send"},
             self._claude_code_send,
+            category="code",
         )
         self.add_tool(
             "claude_code_read",
             "Read the output from a Claude Code session",
             {"session_name": "Session name or identifier"},
             self._claude_code_read,
+            category="code",
         )
         self.add_tool(
             "claude_code_list",
             "List all active Claude Code sessions",
             {},
             self._claude_code_list,
+            category="code",
         )
 
     def register_commands(self):

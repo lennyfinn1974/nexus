@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Nexus Agent — Always-On Daemon -->
+    <!-- Install: cp com.nexus.agent.plist ~/Library/LaunchAgents/ -->
+    <!-- Load:    launchctl load ~/Library/LaunchAgents/com.nexus.agent.plist -->
+    <!-- Unload:  launchctl unload ~/Library/LaunchAgents/com.nexus.agent.plist -->
+    <!-- Status:  launchctl list | grep nexus -->
+
+    <key>Label</key>
+    <string>com.nexus.agent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/lennyfinn/Nexus/venv/bin/python</string>
+        <string>-m</string>
+        <string>uvicorn</string>
+        <string>app:create_app</string>
+        <string>--factory</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>8080</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/lennyfinn/Nexus/backend</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/lennyfinn/Nexus/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>VIRTUAL_ENV</key>
+        <string>/Users/lennyfinn/Nexus/venv</string>
+        <key>PYTHONPATH</key>
+        <string>/Users/lennyfinn/Nexus/backend</string>
+    </dict>
+
+    <!-- Start on login / system boot -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart automatically on crash (5 second throttle) -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <!-- Logging -->
+    <key>StandardOutPath</key>
+    <string>/Users/lennyfinn/Nexus/backend/logs/launchd-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/lennyfinn/Nexus/backend/logs/launchd-stderr.log</string>
+
+    <!-- Resource limits -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>4096</integer>
+    </dict>
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>8192</integer>
+    </dict>
+
+    <!-- Nice level (0 = normal, positive = lower priority) -->
+    <key>Nice</key>
+    <integer>0</integer>
+</dict>
+</plist>

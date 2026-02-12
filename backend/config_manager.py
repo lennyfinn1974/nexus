@@ -62,6 +62,36 @@ SETTINGS_SCHEMA: list[dict] = [
         "type": "text",
         "description": "Local model name (e.g. llama3.1, kimi-k2.5:cloud)",
     },
+    # Claude Code (headless CLI)
+    {
+        "key": "CLAUDE_CODE_ENABLED",
+        "default": "false",
+        "encrypted": False,
+        "category": "Models",
+        "label": "Enable Claude Code",
+        "type": "select",
+        "description": "Enable Claude Code CLI as a third model provider (requires claude CLI installed)",
+        "options": ["false", "true"],
+    },
+    {
+        "key": "CLAUDE_CODE_CLI_PATH",
+        "default": "/opt/homebrew/bin/claude",
+        "encrypted": False,
+        "category": "Models",
+        "label": "Claude Code CLI Path",
+        "type": "text",
+        "description": "Path to the Claude Code CLI binary",
+    },
+    {
+        "key": "CLAUDE_CODE_MODEL",
+        "default": "sonnet",
+        "encrypted": False,
+        "category": "Models",
+        "label": "Claude Code Model",
+        "type": "select",
+        "description": "Which Claude model to use in Claude Code mode",
+        "options": ["sonnet", "opus", "haiku"],
+    },
     # Routing
     {
         "key": "COMPLEXITY_THRESHOLD",
@@ -73,6 +103,100 @@ SETTINGS_SCHEMA: list[dict] = [
         "description": "0 = always Claude, 100 = always local. Score above this → Claude.",
         "min": 0,
         "max": 100,
+    },
+    # Sub-Agent Orchestration
+    {
+        "key": "SUB_AGENT_ENABLED",
+        "default": "true",
+        "encrypted": False,
+        "category": "Sub-Agents",
+        "label": "Enable Sub-Agents",
+        "type": "select",
+        "description": "Allow Aries to spawn parallel sub-agents for research, build/review, and verification",
+        "options": ["true", "false"],
+    },
+    {
+        "key": "SUB_AGENT_AUTO_ENABLED",
+        "default": "false",
+        "encrypted": False,
+        "category": "Sub-Agents",
+        "label": "Auto-Detect Multi-Part Questions",
+        "type": "select",
+        "description": "Automatically detect multi-part requests and spawn sub-agents (experimental)",
+        "options": ["false", "true"],
+    },
+    {
+        "key": "SUB_AGENT_MAX_CONCURRENT",
+        "default": "4",
+        "encrypted": False,
+        "category": "Sub-Agents",
+        "label": "Max Concurrent Sub-Agents",
+        "type": "number",
+        "description": "Maximum sub-agents running in parallel (all model types)",
+        "min": 1,
+        "max": 8,
+    },
+    {
+        "key": "SUB_AGENT_CLAUDE_CODE_CONCURRENT",
+        "default": "2",
+        "encrypted": False,
+        "category": "Sub-Agents",
+        "label": "Max Concurrent Claude Code Sub-Agents",
+        "type": "number",
+        "description": "Maximum Claude Code subprocesses (each uses ~200-500MB RAM)",
+        "min": 1,
+        "max": 4,
+    },
+    {
+        "key": "SUB_AGENT_BUILDER_MODEL",
+        "default": "",
+        "encrypted": False,
+        "category": "Sub-Agents",
+        "label": "Default Builder Model",
+        "type": "select",
+        "description": "Model for builder sub-agents (empty = auto-route)",
+        "options": ["", "ollama", "claude", "claude_code"],
+    },
+    {
+        "key": "SUB_AGENT_REVIEWER_MODEL",
+        "default": "claude",
+        "encrypted": False,
+        "category": "Sub-Agents",
+        "label": "Default Reviewer Model",
+        "type": "select",
+        "description": "Model for reviewer sub-agents",
+        "options": ["claude", "ollama", "claude_code"],
+    },
+    {
+        "key": "SUB_AGENT_CODE_BUILDER_MODEL",
+        "default": "claude_code",
+        "encrypted": False,
+        "category": "Sub-Agents",
+        "label": "Code Builder Model",
+        "type": "select",
+        "description": "Model for code build sub-agents (full MCP tool access)",
+        "options": ["claude_code", "claude", "ollama"],
+    },
+    {
+        "key": "SUB_AGENT_CODE_REVIEWER_MODEL",
+        "default": "claude_code",
+        "encrypted": False,
+        "category": "Sub-Agents",
+        "label": "Code Reviewer Model",
+        "type": "select",
+        "description": "Model for code review sub-agents (can read files, run tests)",
+        "options": ["claude_code", "claude", "ollama"],
+    },
+    {
+        "key": "SUB_AGENT_TIMEOUT",
+        "default": "120",
+        "encrypted": False,
+        "category": "Sub-Agents",
+        "label": "Sub-Agent Timeout (seconds)",
+        "type": "number",
+        "description": "Per-sub-agent timeout (Claude Code gets 300s automatically)",
+        "min": 30,
+        "max": 600,
     },
     # Files
     {
@@ -120,9 +244,9 @@ SETTINGS_SCHEMA: list[dict] = [
         "default": "",
         "encrypted": False,
         "category": "Plugins",
-        "label": "Telegram Allowed Users",
+        "label": "Telegram Allowed Users (Legacy)",
         "type": "text",
-        "description": "Comma-separated Telegram user IDs",
+        "description": "Legacy allowlist. Use pairing codes instead (Link Telegram in chat UI).",
     },
     # Mem0 (Long-term Memory)
     {
@@ -183,6 +307,15 @@ SETTINGS_SCHEMA: list[dict] = [
         "min": 1024,
         "max": 65535,
     },
+    {
+        "key": "TIMEZONE",
+        "default": "",
+        "encrypted": False,
+        "category": "Server",
+        "label": "Timezone",
+        "type": "text",
+        "description": "IANA timezone (e.g. Asia/Dubai, Europe/London). Leave blank for auto-detect.",
+    },
     # Persona
     {
         "key": "AGENT_NAME",
@@ -213,6 +346,15 @@ SETTINGS_SCHEMA: list[dict] = [
         "options": ["professional", "balanced", "casual", "technical"],
     },
     # Authentication
+    {
+        "key": "ADMIN_ACCESS_KEY",
+        "default": "",
+        "encrypted": True,
+        "category": "Authentication",
+        "label": "Admin Console Access Key",
+        "type": "password",
+        "description": "Bearer token for admin API access. Set this to protect the /admin dashboard.",
+    },
     {
         "key": "AUTH_ENABLED",
         "default": "false",
@@ -273,6 +415,17 @@ SETTINGS_SCHEMA: list[dict] = [
         "min": 3600,
         "max": 2592000,
     },
+    # Setup
+    {
+        "key": "SETUP_COMPLETE",
+        "default": "false",
+        "encrypted": False,
+        "category": "System",
+        "label": "Setup Complete",
+        "type": "select",
+        "description": "Whether the initial setup wizard has been completed",
+        "options": ["false", "true"],
+    },
 ]
 
 # Build a fast lookup
@@ -280,7 +433,10 @@ _SCHEMA_MAP = {s["key"]: s for s in SETTINGS_SCHEMA}
 SENSITIVE_KEYS = {s["key"] for s in SETTINGS_SCHEMA if s.get("encrypted")}
 
 # Keys whose change triggers model reconnection
-MODEL_KEYS = {"ANTHROPIC_API_KEY", "CLAUDE_MODEL", "OLLAMA_BASE_URL", "OLLAMA_MODEL", "COMPLEXITY_THRESHOLD"}
+MODEL_KEYS = {
+    "ANTHROPIC_API_KEY", "CLAUDE_MODEL", "OLLAMA_BASE_URL", "OLLAMA_MODEL",
+    "COMPLEXITY_THRESHOLD", "CLAUDE_CODE_ENABLED", "CLAUDE_CODE_CLI_PATH", "CLAUDE_CODE_MODEL",
+}
 
 
 class ConfigManager:
@@ -593,6 +749,14 @@ class ConfigManager:
         return bool(self.telegram_bot_token)
 
     @property
+    def setup_complete(self):
+        return self.get_bool("SETUP_COMPLETE", False)
+
+    @property
+    def admin_access_key(self):
+        return self.get("ADMIN_ACCESS_KEY")
+
+    @property
     def auth_enabled(self):
         return self.get_bool("AUTH_ENABLED", False)
 
@@ -615,6 +779,10 @@ class ConfigManager:
     @property
     def jwt_refresh_ttl(self):
         return self.get_int("JWT_REFRESH_TTL", 604800)
+
+    @property
+    def timezone(self):
+        return self.get("TIMEZONE", "")
 
     @property
     def has_oauth(self):

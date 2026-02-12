@@ -22,6 +22,8 @@ class WebSocketManager:
         self.message_queues: dict[str, deque] = defaultdict(lambda: deque(maxlen=max_queue_size))
         self.heartbeat_interval = heartbeat_interval
         self.heartbeat_tasks: dict[str, asyncio.Task] = {}
+        # Message transforms for sub-agents: virtual_ws_id → transform_fn
+        self._message_transforms: dict[str, callable] = {}
 
     async def connect(self, websocket: WebSocket, session_id: str = None) -> str:
         """Accept a new WebSocket connection and assign session."""
@@ -83,8 +85,36 @@ class WebSocketManager:
 
         logger.info(f"WebSocket disconnected: {ws_id} (session kept: {keep_session})")
 
+    # ── Sub-Agent Message Transforms ─────────────────────────────
+
+    def register_transform(self, virtual_ws_id: str, transform_fn: callable):
+        """Register a message transform for a virtual sub-agent ws_id.
+
+        When send_to_client is called with a virtual ws_id, the transform_fn
+        converts the message and returns (real_ws_id, transformed_message).
+        This lets sub-agents stream via AgentAttempt's normal flow while
+        the UI receives tagged sub-agent messages.
+        """
+        self._message_transforms[virtual_ws_id] = transform_fn
+
+    def unregister_transform(self, virtual_ws_id: str):
+        """Remove a sub-agent message transform."""
+        self._message_transforms.pop(virtual_ws_id, None)
+
     async def send_to_client(self, ws_id: str, message: dict):
-        """Send message to client, queue if offline."""
+        """Send message to client, queue if offline.
+
+        If ws_id has a registered transform (sub-agent virtual ID),
+        the message is transformed and routed to the real WebSocket.
+        """
+        # Check for sub-agent message transform
+        if ws_id in self._message_transforms:
+            transform_fn = self._message_transforms[ws_id]
+            real_ws_id, message = transform_fn(message)
+            if message is None:
+                return  # Transform suppressed this message
+            ws_id = real_ws_id
+
         if ws_id in self.connections:
             # Client is online, send immediately
             await self._send_message(ws_id, message)

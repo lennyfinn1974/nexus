@@ -26,7 +26,9 @@ import importlib.util
 import logging
 import os
 import re
+import time
 import uuid
+from collections import defaultdict
 
 import yaml
 
@@ -65,12 +67,44 @@ class SkillAction:
     def __init__(self, name: str, description: str, parameters: dict, handler):
         self.name = name
         self.description = description
-        self.parameters = parameters
+        self.parameters = parameters  # {param_name: description_str}
         self.handler = handler  # async callable(params) -> str
 
     def to_prompt_description(self) -> str:
         params = ", ".join(f"{k}: {v}" for k, v in self.parameters.items())
         return f"- **{self.name}**({params}): {self.description}"
+
+    def validate_params(self, params: dict) -> list[str]:
+        """Validate parameters against the action's parameter schema.
+
+        Returns a list of warning messages (empty = all good).
+        Checks for missing parameters and flags unknown ones.
+        """
+        warnings = []
+        provided = {k for k in params if k != "_config"}
+        expected = set(self.parameters.keys())
+
+        missing = expected - provided
+        if missing:
+            # Check if the description hints at a default (e.g. "default 7")
+            truly_missing = []
+            for m in missing:
+                desc = str(self.parameters.get(m, "")).lower()
+                if "default" not in desc and "optional" not in desc:
+                    truly_missing.append(m)
+            if truly_missing:
+                warnings.append(
+                    f"Missing required parameter(s): {', '.join(truly_missing)}"
+                )
+
+        unknown = provided - expected
+        if unknown:
+            warnings.append(
+                f"Unknown parameter(s): {', '.join(unknown)} "
+                f"(expected: {', '.join(expected)})"
+            )
+
+        return warnings
 
 
 class Skill:
@@ -120,15 +154,19 @@ class Skill:
 
     def get_knowledge(self) -> str:
         if self._knowledge is None:
-            # Try standard location first
-            if os.path.exists(self.knowledge_path):
-                with open(self.knowledge_path) as f:
-                    self._knowledge = f.read()
-            # Fall back to legacy single-file path
-            elif self._legacy_file and os.path.exists(self._legacy_file):
-                with open(self._legacy_file) as f:
-                    self._knowledge = f.read()
-            else:
+            try:
+                # Try standard location first
+                if os.path.exists(self.knowledge_path):
+                    with open(self.knowledge_path) as f:
+                        self._knowledge = f.read()
+                # Fall back to legacy single-file path
+                elif self._legacy_file and os.path.exists(self._legacy_file):
+                    with open(self._legacy_file) as f:
+                        self._knowledge = f.read()
+                else:
+                    self._knowledge = ""
+            except (PermissionError, OSError) as e:
+                logger.warning(f"Cannot read knowledge for {self.id}: {e}")
                 self._knowledge = ""
         return self._knowledge
 
@@ -211,6 +249,14 @@ class SkillsEngine:
         self.config = config_manager
         self.skills: dict[str, Skill] = {}
         os.makedirs(skills_dir, exist_ok=True)
+
+        # ── Audit tracking ──
+        # Tracks action execution history for observability
+        self._audit_log: list[dict] = []  # Recent action executions (ring buffer, max 200)
+        self._audit_stats: dict[str, dict] = defaultdict(
+            lambda: {"calls": 0, "errors": 0, "total_ms": 0.0}
+        )
+        _AUDIT_LOG_MAX = 200
 
     # ── loading ──
 
@@ -354,22 +400,111 @@ class SkillsEngine:
         return "\n".join(parts)
 
     async def execute_action(self, action_name: str, params: dict) -> str:
-        """Find and run a skill action by name."""
+        """Find and run a skill action by name, with audit logging."""
+        import asyncio as _asyncio
+
         for skill in self.skills.values():
             for action in skill.actions:
                 if action.name == action_name:
                     if self.config and not skill.is_configured(self.config):
                         missing = [
-                            k for k, s in skill.config_schema.items() if s.get("required") and not self.config.get(k)
+                            k for k, s in skill.config_schema.items()
+                            if s.get("required") and not self.config.get(k)
                         ]
-                        return f"Skill '{skill.name}' not configured. " f"Missing: {', '.join(missing)}"
+                        return (
+                            f"Skill '{skill.name}' not configured. "
+                            f"Missing: {', '.join(missing)}"
+                        )
+
+                    # Validate parameters before execution
+                    param_warnings = action.validate_params(params)
+                    if param_warnings:
+                        for w in param_warnings:
+                            logger.warning(f"Action {action_name}: {w}")
+
+                    start = time.monotonic()
+                    error_msg = None
                     try:
-                        params["_config"] = self.config
-                        return str(await action.handler(params))
+                        # Inject config and validate params
+                        exec_params = {k: v for k, v in params.items() if k != "_config"}
+                        exec_params["_config"] = self.config
+
+                        result = action.handler(exec_params)
+                        # Support both sync and async action handlers
+                        if _asyncio.iscoroutine(result):
+                            result = await result
+                        return str(result)
                     except Exception as e:
+                        error_msg = str(e)
                         logger.error(f"Action {action_name} failed: {e}")
                         return f"Error: {e}"
+                    finally:
+                        duration_ms = (time.monotonic() - start) * 1000
+                        self._record_audit(
+                            skill_id=skill.id,
+                            action_name=action_name,
+                            params={k: v for k, v in params.items() if k != "_config"},
+                            duration_ms=duration_ms,
+                            error=error_msg,
+                        )
+
         return f"Unknown action: {action_name}"
+
+    def _record_audit(
+        self,
+        skill_id: str,
+        action_name: str,
+        params: dict,
+        duration_ms: float,
+        error: str | None = None,
+    ) -> None:
+        """Record an action execution in the audit log."""
+        import datetime as _dt
+
+        entry = {
+            "timestamp": _dt.datetime.now().isoformat(),
+            "skill_id": skill_id,
+            "action": action_name,
+            "params": {k: str(v)[:100] for k, v in params.items()},  # Truncate values
+            "duration_ms": round(duration_ms, 1),
+            "success": error is None,
+            "error": error,
+        }
+
+        # Ring buffer — keep last 200 entries
+        self._audit_log.append(entry)
+        if len(self._audit_log) > 200:
+            self._audit_log = self._audit_log[-200:]
+
+        # Aggregate stats
+        stats = self._audit_stats[action_name]
+        stats["calls"] += 1
+        stats["total_ms"] += duration_ms
+        if error:
+            stats["errors"] += 1
+
+        logger.info(
+            f"Skill audit: {skill_id}/{action_name} "
+            f"{'OK' if not error else 'FAIL'} "
+            f"in {duration_ms:.1f}ms"
+        )
+
+    def get_audit_summary(self) -> dict:
+        """Return audit stats for all skill actions."""
+        summary = {}
+        for action_name, stats in self._audit_stats.items():
+            avg_ms = stats["total_ms"] / stats["calls"] if stats["calls"] else 0
+            summary[action_name] = {
+                "calls": stats["calls"],
+                "errors": stats["errors"],
+                "avg_ms": round(avg_ms, 1),
+                "total_ms": round(stats["total_ms"], 1),
+            }
+        return summary
+
+    def get_recent_audit_log(self, limit: int = 20) -> list[dict]:
+        """Return the most recent audit log entries."""
+        return self._audit_log[-limit:]
 
     # ── listing ──
 

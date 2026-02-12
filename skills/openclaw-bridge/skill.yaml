@@ -1,0 +1,63 @@
+id: openclaw-bridge
+name: OpenClaw Bridge
+type: integration
+version: "1.0"
+domain: communication
+description: Direct communication bridge with OpenClaw agent ecosystem
+author: partnership
+
+config:
+  OPENCLAW_GATEWAY_URL:
+    label: OpenClaw Gateway URL
+    type: text
+    required: true
+    description: OpenClaw Gateway API endpoint (e.g., http://localhost:18789)
+  OPENCLAW_TOKEN:
+    label: OpenClaw Auth Token
+    type: password
+    required: true
+    description: Authentication token for OpenClaw API access
+
+triggers:
+  keywords:
+    - send to aries
+    - notify openclaw
+    - openclaw handoff
+    - transfer to aries
+    - aries help
+    - openclaw bridge
+  patterns:
+    - "(?:send|transfer|handoff) (?:to|this to) (?:aries|openclaw)"
+    - "(?:notify|alert|tell) (?:aries|openclaw) (?:about|that)"
+    - "aries (?:can you|please|help)"
+
+actions:
+  - name: send_to_aries
+    description: Send a message to Aries (OpenClaw main agent)
+    handler: send_to_aries
+    parameters:
+      message: Message content to send
+      priority: Message priority (low/normal/high)
+      
+  - name: notify_completion
+    description: Notify Aries that a task has been completed
+    handler: notify_completion
+    parameters:
+      task_description: Brief description of completed task
+      result_summary: Summary of results or outcome
+      attachments: Optional file paths or data to include
+      
+  - name: request_assistance
+    description: Request help from Aries for system-level tasks
+    handler: request_assistance  
+    parameters:
+      assistance_type: Type of help needed (file_management/messaging/system_control/calendar)
+      details: Specific details about what help is needed
+      urgency: How urgent the request is (low/medium/high)
+      
+  - name: sync_context
+    description: Synchronize shared context and memory between agents
+    handler: sync_context
+    parameters:
+      context_type: Type of context to sync (task_progress/shared_memory/user_preferences)
+      data: Context data to synchronize

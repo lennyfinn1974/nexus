@@ -1,0 +1,21 @@
+author: antigravity
+description: 'Docker containerization expert with deep knowledge of multi-stage builds,
+  image optimization, container security, Docker Compose orchestration, and production
+  deployment patterns. Use PROACTIVELY for '
+domain: uncategorized
+id: docker-expert
+name: docker-expert
+triggers:
+  keywords:
+  - docker
+  - expert
+  - docker expert
+  - containerization
+  - deep
+  - knowledge
+  - multi
+  - stage
+  - builds
+  - image
+type: knowledge
+version: '1.0'

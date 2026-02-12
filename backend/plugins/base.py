@@ -28,6 +28,7 @@ class ToolInfo:
     description: str = ""
     parameters: dict = field(default_factory=dict)
     handler: Callable | None = None
+    category: str = "general"
 
 
 class NexusPlugin(abc.ABC):
@@ -106,6 +107,7 @@ class NexusPlugin(abc.ABC):
         description: str,
         parameters: dict,
         handler: Callable,
+        category: str = "general",
     ) -> None:
         """Register a tool that the AI can call."""
         self.tools.append(
@@ -114,6 +116,7 @@ class NexusPlugin(abc.ABC):
                 description=description,
                 parameters=parameters,
                 handler=handler,
+                category=category,
             )
         )
 

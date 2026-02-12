@@ -1,0 +1,28 @@
+id: web-research
+name: Web Research
+type: integration
+version: 1.0.0
+domain: research
+description: Fetch web pages, search the web, and summarize content
+author: nexus
+triggers:
+  keywords: [search, web, fetch, url, browse, research, website]
+  patterns:
+    - "(search|look up) (the web|online) for .*"
+    - "fetch .*url.*"
+    - "summarize .*(page|article|url).*"
+    - "what is .*\\?"
+actions:
+  - name: fetch_url
+    description: Fetch and extract text content from a URL
+    parameters:
+      url: The URL to fetch
+  - name: search_web
+    description: Search the web using DuckDuckGo
+    parameters:
+      query: Search query
+      num_results: Number of results (default 5)
+  - name: summarize_page
+    description: Fetch a URL and provide a concise summary
+    parameters:
+      url: The URL to summarize

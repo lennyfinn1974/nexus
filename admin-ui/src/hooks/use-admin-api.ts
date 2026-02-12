@@ -5,7 +5,9 @@ import type {
   PluginsResponse, ModelsResponse, OllamaListResponse, SettingsResponse,
   SettingsUpdateResponse, SystemInfo, Backup, BackupResponse,
   AuditEntry, LogEntry, Task, SystemPromptResponse, Skill, SkillPack,
-  TestConnectionResponse,
+  TestConnectionResponse, CatalogSearchResponse, CatalogCategory,
+  CatalogInstallResponse, SetupStatusResponse, SetupCompleteResponse,
+  WorkItem, WorkItemCounts,
 } from '@/types/api'
 
 // ── Queries ──
@@ -58,6 +60,19 @@ export const useTasks = (refetchInterval?: number) =>
   useQuery({
     queryKey: ['tasks'],
     queryFn: () => api.get<Task[]>('/tasks'),
+    refetchInterval,
+  })
+
+export const useWorkstreams = () =>
+  useQuery({
+    queryKey: ['admin', 'workstreams'],
+    queryFn: () => api.get<WorkItem[]>('/admin/workstreams'),
+  })
+
+export const useWorkstreamCounts = (refetchInterval?: number) =>
+  useQuery({
+    queryKey: ['admin', 'workstreams', 'counts'],
+    queryFn: () => api.get<WorkItemCounts>('/admin/workstreams/counts'),
     refetchInterval,
   })
 
@@ -152,5 +167,56 @@ export function useDeleteSkill() {
   return useMutation({
     mutationFn: (id: string) => api.delete<{ deleted: string }>(`/admin/skills/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'skills'] }),
+  })
+}
+
+// ── Setup ──
+
+export const useSetupStatus = () =>
+  useQuery({
+    queryKey: ['setup', 'status'],
+    queryFn: () => api.get<SetupStatusResponse>('/setup/status'),
+    staleTime: 10000,
+  })
+
+export function useCompleteSetup() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (adminKey: string) =>
+      api.post<SetupCompleteResponse>('/admin/setup/complete', { admin_key: adminKey }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['setup', 'status'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'settings'] })
+    },
+  })
+}
+
+// ── Catalog ──
+
+export const useCatalogSearch = (query: string, category: string) =>
+  useQuery({
+    queryKey: ['admin', 'catalog', 'search', query, category],
+    queryFn: () => api.get<CatalogSearchResponse>(
+      `/admin/catalog/search?q=${encodeURIComponent(query)}&category=${encodeURIComponent(category)}&limit=20`
+    ),
+    enabled: query.length > 0 || category.length > 0,
+    staleTime: 30000,
+  })
+
+export const useCatalogCategories = () =>
+  useQuery({
+    queryKey: ['admin', 'catalog', 'categories'],
+    queryFn: () => api.get<CatalogCategory[]>('/admin/catalog/categories'),
+  })
+
+export function useInstallCatalogSkill() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (skillId: string) =>
+      api.post<CatalogInstallResponse>(`/admin/catalog/${skillId}/install`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'skills'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'catalog'] })
+    },
   })
 }
