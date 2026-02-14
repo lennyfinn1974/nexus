@@ -437,17 +437,25 @@ class SubAgentOrchestrator:
                     f"{[s.id for s in layer]}"
                 )
 
-                # Execute all specs in this layer concurrently
-                tasks = []
-                for spec in layer:
-                    task = asyncio.create_task(
-                        self._run_sub_agent_with_semaphore(spec, orchestration),
-                        name=f"sub-agent-{spec.id}",
-                    )
-                    self._running_tasks.append(task)
-                    tasks.append(task)
+                # Check for distributed execution via Redis Streams
+                task_stream = self._get_task_stream()
 
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                if task_stream:
+                    results = await self._execute_layer_distributed(
+                        layer, orchestration, task_stream
+                    )
+                else:
+                    # Local execution: run sub-agents in-process
+                    tasks = []
+                    for spec in layer:
+                        task = asyncio.create_task(
+                            self._run_sub_agent_with_semaphore(spec, orchestration),
+                            name=f"sub-agent-{spec.id}",
+                        )
+                        self._running_tasks.append(task)
+                        tasks.append(task)
+
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
 
                 # Process results
                 for spec, result in zip(layer, results):
@@ -518,6 +526,106 @@ class SubAgentOrchestrator:
             except Exception:
                 pass
             raise
+
+    def _get_task_stream(self):
+        """Get the distributed task stream, if clustering is active."""
+        try:
+            cluster_mgr = getattr(self.state, "cluster_manager", None)
+            if cluster_mgr and cluster_mgr.is_active and cluster_mgr.task_stream:
+                return cluster_mgr.task_stream
+        except Exception:
+            pass
+        return None
+
+    async def _execute_layer_distributed(
+        self, layer: list, orchestration, task_stream
+    ) -> list:
+        """Execute a layer of sub-agents via Redis Streams.
+
+        Publishes each sub-agent as a task, then waits for results.
+        Returns a list of SubAgentResult (or Exception) per spec.
+        """
+        import json
+
+        task_ids = []
+        for spec in layer:
+            # Resolve the prompt for this spec
+            prompt = self._resolve_prompt(spec, orchestration)
+
+            task_id = await task_stream.publish(
+                task_type="sub_agent",
+                payload={
+                    "spec_id": spec.id,
+                    "orchestration_id": orchestration.id,
+                    "role": spec.role.value,
+                    "prompt": prompt,
+                    "model": spec.model or "",
+                    "max_tokens": spec.max_tokens,
+                    "dependencies": spec.dependencies,
+                },
+                priority="normal",
+                conv_id=self.conv_id,
+                role=spec.role.value,
+                model_hint=spec.model or "",
+                parent_id=orchestration.id,
+                timeout_ms=(spec.max_tokens // 4) * 1000 or 60_000,
+            )
+            task_ids.append((spec, task_id))
+
+            logger.info(
+                f"[{orchestration.id}] Published sub-agent {spec.id} "
+                f"to stream (task_id={task_id})"
+            )
+
+        # Wait for all results
+        timeout = 120  # 2 minutes per layer
+        if self.cfg:
+            timeout = self.cfg.get_int("SUB_AGENT_TIMEOUT", 120)
+
+        stream_results = await task_stream.await_results(
+            [tid for _, tid in task_ids],
+            timeout=timeout,
+        )
+
+        # Convert stream results back to SubAgentResult
+        results = []
+        for spec, task_id in task_ids:
+            stream_result = stream_results.get(task_id)
+
+            if not stream_result:
+                results.append(SubAgentResult(
+                    id=spec.id,
+                    role=spec.role,
+                    model_used=spec.model or "unknown",
+                    output="",
+                    error="Timed out waiting for distributed result",
+                    status=SubAgentStatus.FAILED,
+                ))
+            elif stream_result.get("status") == "completed":
+                result_data = stream_result.get("result", "")
+                if isinstance(result_data, dict):
+                    output = result_data.get("output", str(result_data))
+                else:
+                    output = str(result_data)
+
+                results.append(SubAgentResult(
+                    id=spec.id,
+                    role=spec.role,
+                    model_used=stream_result.get("agent_id", spec.model or "distributed"),
+                    output=output,
+                    status=SubAgentStatus.COMPLETED,
+                ))
+            else:
+                results.append(SubAgentResult(
+                    id=spec.id,
+                    role=spec.role,
+                    model_used=spec.model or "unknown",
+                    output="",
+                    error=stream_result.get("error", "Unknown error"),
+                    status=SubAgentStatus.FAILED,
+                ))
+
+        return results
 
     async def _run_sub_agent_with_semaphore(
         self, spec: SubAgentSpec, orchestration: Orchestration

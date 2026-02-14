@@ -2,6 +2,11 @@
 
 Supports both one-shot tasks (submit) and periodic tasks (schedule).
 Periodic tasks run at fixed intervals using asyncio — no APScheduler needed.
+
+When clustering is enabled (set_task_stream called), tasks are published
+to Redis Streams for distributed execution across the agent cluster.
+Local handlers are still registered — they run on whichever agent claims
+the task from the stream.
 """
 
 import asyncio
@@ -45,10 +50,32 @@ class TaskQueue:
         self._periodic: dict[str, PeriodicTask] = {}
         self._scheduler_task: Optional[asyncio.Task] = None
         self._shutdown = False
+        self._task_stream = None  # Set when clustering enabled
+
+    def set_task_stream(self, task_stream) -> None:
+        """Connect to a distributed TaskStream for clustered execution.
+
+        When set, submit() publishes to Redis Streams instead of
+        running locally. Handlers are still registered locally so
+        this agent can consume tasks from the stream.
+        """
+        self._task_stream = task_stream
+        # Register all existing handlers on the stream too
+        for task_type, handler in self._handlers.items():
+            task_stream.register_handler(task_type, handler)
+        logger.info(f"TaskQueue connected to distributed TaskStream")
+
+    @property
+    def is_distributed(self) -> bool:
+        """True when tasks are being distributed via Redis Streams."""
+        return self._task_stream is not None
 
     def register_handler(self, task_type: str, handler: callable):
         """Register an async handler function for a task type."""
         self._handlers[task_type] = handler
+        # Also register on stream if connected
+        if self._task_stream:
+            self._task_stream.register_handler(task_type, handler)
         logger.info(f"Registered task handler: {task_type}")
 
     def register_periodic(
@@ -132,8 +159,19 @@ class TaskQueue:
             for name, pt in self._periodic.items()
         ]
 
-    async def submit(self, task_type: str, payload: dict = None) -> dict:
-        """Submit a new task for background processing."""
+    async def submit(
+        self,
+        task_type: str,
+        payload: dict = None,
+        priority: str = "normal",
+        conv_id: str = "",
+        user_id: str = "",
+    ) -> dict:
+        """Submit a new task for background processing.
+
+        When clustering is active, publishes to Redis Streams for
+        distributed execution. Otherwise runs locally via asyncio.
+        """
         task_id = f"task-{uuid.uuid4().hex[:8]}"
 
         if task_type not in self._handlers:
@@ -142,11 +180,22 @@ class TaskQueue:
         # Record in DB
         task_record = await self.db.create_task(task_id, task_type, payload)
 
-        # Launch background execution
-        asyncio_task = asyncio.create_task(self._execute(task_id, task_type, payload))
-        self._running_tasks[task_id] = asyncio_task
+        # Distributed path: publish to Redis Streams
+        if self._task_stream:
+            stream_task_id = await self._task_stream.publish(
+                task_type=task_type,
+                payload=payload or {},
+                priority=priority,
+                conv_id=conv_id,
+                user_id=user_id,
+            )
+            logger.info(f"Submitted task {task_id} → stream (distributed, stream_id={stream_task_id})")
+        else:
+            # Local path: execute in-process
+            asyncio_task = asyncio.create_task(self._execute(task_id, task_type, payload))
+            self._running_tasks[task_id] = asyncio_task
+            logger.info(f"Submitted task {task_id} ({task_type}) [local]")
 
-        logger.info(f"Submitted task {task_id} ({task_type})")
         try:
             from core.work_registry import work_registry
             await work_registry.register(

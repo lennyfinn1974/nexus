@@ -3,7 +3,7 @@ import { useAuth } from '@/contexts/auth-context'
 import { cn } from '@/lib/utils'
 import {
   LayoutDashboard, Heart, Shield, Activity, Users, Layers, Settings,
-  Puzzle, UserCircle, MessageSquare, ScrollText, Monitor, Zap, LogOut, ArrowLeft, Kanban,
+  Puzzle, UserCircle, MessageSquare, ScrollText, Monitor, Zap, LogOut, ArrowLeft, Kanban, Network, Brain,
 } from 'lucide-react'
 
 const navSections = [
@@ -35,6 +35,8 @@ const navSections = [
   {
     label: 'Monitor',
     items: [
+      { to: '/admin/cluster', icon: Network, label: 'Cluster' },
+      { to: '/admin/memory', icon: Brain, label: 'Memory' },
       { to: '/admin/workstreams', icon: Kanban, label: 'Work Streams' },
       { to: '/admin/conversations', icon: MessageSquare, label: 'Conversations' },
       { to: '/admin/logs', icon: ScrollText, label: 'Logs' },

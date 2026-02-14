@@ -8,6 +8,8 @@ import type {
   TestConnectionResponse, CatalogSearchResponse, CatalogCategory,
   CatalogInstallResponse, SetupStatusResponse, SetupCompleteResponse,
   WorkItem, WorkItemCounts,
+  ClusterStatusResponse, ClusterAgent, ClusterMetrics,
+  MemorySystemStatus, KnowledgeGraphData,
 } from '@/types/api'
 
 // ── Queries ──
@@ -220,3 +222,42 @@ export function useInstallCatalogSkill() {
     },
   })
 }
+
+// ── Cluster ──
+
+export const useClusterStatus = (refetchInterval?: number) =>
+  useQuery({
+    queryKey: ['admin', 'cluster', 'status'],
+    queryFn: () => api.get<ClusterStatusResponse>('/admin/cluster/status'),
+    refetchInterval,
+  })
+
+export const useClusterAgents = (refetchInterval?: number) =>
+  useQuery({
+    queryKey: ['admin', 'cluster', 'agents'],
+    queryFn: () => api.get<ClusterAgent[]>('/admin/cluster/agents'),
+    refetchInterval,
+  })
+
+export const useClusterMetrics = (refetchInterval?: number) =>
+  useQuery({
+    queryKey: ['admin', 'cluster', 'metrics'],
+    queryFn: () => api.get<ClusterMetrics>('/admin/cluster/metrics'),
+    refetchInterval,
+    enabled: true,
+  })
+
+// ── Memory & Knowledge ──
+
+export const useMemoryStatus = (refetchInterval?: number) =>
+  useQuery({
+    queryKey: ['admin', 'memory', 'status'],
+    queryFn: () => api.get<MemorySystemStatus>('/admin/memory/status'),
+    refetchInterval,
+  })
+
+export const useKnowledgeGraph = (maxEntities = 100) =>
+  useQuery({
+    queryKey: ['admin', 'memory', 'knowledge-graph', maxEntities],
+    queryFn: () => api.get<KnowledgeGraphData>(`/admin/memory/knowledge-graph?max_entities=${maxEntities}`),
+  })

@@ -17,7 +17,7 @@ from auth import (
     OAuthManager,
     UserManager,
 )
-from config_manager import MODEL_KEYS, ConfigManager
+from config_manager import CLUSTER_KEYS, MODEL_KEYS, ConfigManager
 from core.security import init_allowed_dirs, validate_path
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -92,12 +92,16 @@ class AppState:
     task_queue: TaskQueue = None
     plugin_manager: PluginManager = None
     tool_executor: Any = None
+    cluster_manager: Any = None
     telegram_channel: Any = None
     jwt_manager: JWTManager = None
     oauth_manager: OAuthManager = None
     user_manager: UserManager = None
     ip_security: IPSecurity = None
     audit_log: AuthAuditLog = None
+    embedding_service: Any = None
+    rag_pipeline: Any = None
+    knowledge_graph: Any = None
     allowed_origins: list = field(default_factory=list)
     base_dir: str = ""
 
@@ -285,6 +289,51 @@ async def lifespan(app: FastAPI):
     state.model_router = ModelRouter(ollama, claude, claude_code, state.cfg.complexity_threshold)
     await state.model_router.check_availability()
 
+    # Agent Clustering (Redis-based coordination — Phase 6)
+    if state.cfg.cluster_enabled:
+        try:
+            from core.cluster import ClusterManager
+
+            cluster_config = state.cfg.get_cluster_config()
+            state.cluster_manager = ClusterManager(cluster_config)
+
+            # Gather this agent's capabilities from plugins and models
+            agent_models = []
+            if ollama:
+                agent_models.append(f"ollama/{state.cfg.ollama_model}")
+            if claude:
+                agent_models.append(f"claude/{state.cfg.claude_model}")
+            if claude_code:
+                agent_models.append("claude_code")
+
+            agent_capabilities = ["orchestration", "web", "terminal"]
+            if state.cfg.has_telegram:
+                agent_capabilities.append("telegram")
+
+            cluster_started = await state.cluster_manager.start(
+                host=state.cfg.host,
+                port=state.cfg.port,
+                models=agent_models,
+                capabilities=agent_capabilities,
+            )
+
+            if cluster_started:
+                logger.info(
+                    f"Cluster joined: agent={state.cluster_manager.agent_id} "
+                    f"role={state.cluster_manager.registry.role}"
+                )
+            else:
+                logger.warning("Cluster failed to start — running in single-agent mode")
+                state.cluster_manager = None
+        except ImportError:
+            logger.warning("Clustering: redis package not installed — running in single-agent mode")
+            state.cluster_manager = None
+        except Exception as e:
+            logger.error(f"Clustering failed: {e} — running in single-agent mode")
+            state.cluster_manager = None
+    else:
+        logger.info("Clustering disabled (CLUSTER_ENABLED=false)")
+
     # Skills
     state.skills_engine = SkillsEngine(state.cfg.skills_dir, state.db, config_manager=state.cfg)
     await state.skills_engine.load_all()
@@ -307,6 +356,11 @@ async def lifespan(app: FastAPI):
     state.task_queue = TaskQueue(state.db, state.cfg.max_research_tasks)
     state.task_queue.register_handler("research", lambda p: _handle_research_task(p, state))
     state.task_queue.register_handler("ingest", lambda p: _handle_ingest_task(p, state))
+
+    # Connect task queue to distributed stream if clustering is active
+    if state.cluster_manager and state.cluster_manager.task_stream:
+        state.task_queue.set_task_stream(state.cluster_manager.task_stream)
+        logger.info("Task queue connected to Redis Streams (distributed mode)")
 
     # Register periodic tasks and start scheduler
     state.task_queue.register_periodic(
@@ -370,6 +424,7 @@ async def lifespan(app: FastAPI):
         audit_log=state.audit_log,
         skill_catalog=state.skill_catalog,
         work_registry=work_registry,
+        cluster_manager=state.cluster_manager,
     )
 
     # Telegram (optional)
@@ -420,6 +475,95 @@ async def lifespan(app: FastAPI):
         state.passive_memory = None
         logger.warning(f"Passive memory failed to initialize: {e}")
 
+    # Wire working memory promotion to PassiveMemorySystem (dual-write to PG)
+    if (getattr(state, "cluster_manager", None)
+            and state.cluster_manager.working_memory
+            and getattr(state, "passive_memory", None)):
+        async def _promote_to_pg(data: dict):
+            """Promote working memory items to PostgreSQL via PersonalMemorySystem."""
+            try:
+                mem_type = data.get("type", "")
+                if mem_type == "preference" and state.db.memory_system:
+                    await state.db.memory_system.learn_preference(
+                        key=data.get("key", "unknown"),
+                        value=data.get("value", ""),
+                        category=data.get("category", "general"),
+                        confidence=data.get("confidence", 0.8),
+                    )
+                elif mem_type == "pattern" and state.db.memory_system:
+                    await state.db.memory_system.record_pattern(
+                        pattern_id=data.get("pattern_id", ""),
+                        description=data.get("description", ""),
+                        triggers=data.get("triggers", []),
+                        context_type=data.get("context_type", "general"),
+                    )
+                logger.debug(f"Promoted {mem_type} memory to PostgreSQL")
+            except Exception as e:
+                logger.warning(f"Memory promotion to PG failed: {e}")
+
+        state.cluster_manager.working_memory.set_promotion_callback(_promote_to_pg)
+        logger.info("Working memory → PostgreSQL promotion pipeline connected")
+
+    # Embedding Service — local embeddings via Ollama
+    try:
+        from core.embeddings import EmbeddingService
+
+        embedding_model = state.cfg.get("EMBEDDING_MODEL", "nomic-embed-text")
+        embedding_dims = int(state.cfg.get("EMBEDDING_DIMS", "768"))
+        state.embedding_service = EmbeddingService(
+            ollama_url=state.cfg.ollama_base_url,
+            model=embedding_model,
+            dims=embedding_dims,
+        )
+        avail = await state.embedding_service.is_available()
+        if avail:
+            logger.info(f"Embedding service ready: {embedding_model} ({embedding_dims}-dim)")
+        else:
+            logger.warning(f"Embedding model '{embedding_model}' not available. Run: ollama pull {embedding_model}")
+    except Exception as e:
+        state.embedding_service = None
+        logger.warning(f"Embedding service failed to initialize: {e}")
+
+    # RAG Pipeline — retrieval-augmented generation
+    rag_enabled = state.cfg.get_bool("RAG_ENABLED", True)
+    if rag_enabled and state.embedding_service and getattr(state, "cluster_manager", None) and state.cluster_manager.is_active:
+        try:
+            from core.rag import RAGPipeline
+
+            state.rag_pipeline = RAGPipeline(
+                embedding_service=state.embedding_service,
+                cluster_manager=state.cluster_manager,
+            )
+            logger.info("RAG pipeline initialized (embedding + vector search active)")
+        except Exception as e:
+            state.rag_pipeline = None
+            logger.warning(f"RAG pipeline failed to initialize: {e}")
+    elif rag_enabled:
+        logger.info("RAG pipeline: waiting for clustering + embeddings (will activate when both ready)")
+    else:
+        logger.info("RAG pipeline disabled (RAG_ENABLED=false)")
+
+    # Knowledge Graph — entity extraction + relationship mapping
+    kg_enabled = state.cfg.get_bool("KNOWLEDGE_GRAPH_ENABLED", True)
+    if kg_enabled:
+        try:
+            from core.knowledge_graph import KnowledgeGraph
+
+            state.knowledge_graph = KnowledgeGraph(
+                db=state.db,
+                redis=getattr(state.cluster_manager, "_redis", None) if state.cluster_manager else None,
+            )
+            await state.knowledge_graph.start()
+            logger.info(
+                f"Knowledge graph loaded: {state.knowledge_graph.entity_count} entities, "
+                f"{state.knowledge_graph.relationship_count} relationships"
+            )
+        except Exception as e:
+            state.knowledge_graph = None
+            logger.warning(f"Knowledge graph failed to initialize: {e}")
+    else:
+        logger.info("Knowledge graph disabled (KNOWLEDGE_GRAPH_ENABLED=false)")
+
     # Reminder Manager — scheduled user reminders
     try:
         from core.reminders import ReminderManager
@@ -454,6 +598,10 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ──
     logger.info("Shutting down...")
+    if getattr(state, "embedding_service", None):
+        await state.embedding_service.close()
+    if getattr(state, "cluster_manager", None):
+        await state.cluster_manager.stop()
     if getattr(state, "headless_renderer", None):
         await state.headless_renderer.close()
     if getattr(state, "reminder_manager", None):

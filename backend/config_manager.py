@@ -248,6 +248,68 @@ SETTINGS_SCHEMA: list[dict] = [
         "type": "text",
         "description": "Legacy allowlist. Use pairing codes instead (Link Telegram in chat UI).",
     },
+    # RAG & Knowledge Systems
+    {
+        "key": "RAG_ENABLED",
+        "default": "true",
+        "encrypted": False,
+        "category": "Memory",
+        "label": "Enable RAG",
+        "type": "select",
+        "description": "Retrieval-Augmented Generation — enriches responses with relevant memories",
+        "options": ["true", "false"],
+    },
+    {
+        "key": "EMBEDDING_MODEL",
+        "default": "nomic-embed-text",
+        "encrypted": False,
+        "category": "Memory",
+        "label": "Embedding Model",
+        "type": "text",
+        "description": "Ollama model for generating embeddings (768-dim for nomic-embed-text)",
+    },
+    {
+        "key": "EMBEDDING_DIMS",
+        "default": "768",
+        "encrypted": False,
+        "category": "Memory",
+        "label": "Embedding Dimensions",
+        "type": "number",
+        "description": "Vector dimensions (768 for nomic-embed-text, 1536 for OpenAI)",
+        "min": 128,
+        "max": 4096,
+    },
+    {
+        "key": "RAG_MAX_RESULTS",
+        "default": "5",
+        "encrypted": False,
+        "category": "Memory",
+        "label": "RAG Max Results",
+        "type": "number",
+        "description": "Maximum memories retrieved per query",
+        "min": 1,
+        "max": 20,
+    },
+    {
+        "key": "RAG_AUTO_INGEST",
+        "default": "true",
+        "encrypted": False,
+        "category": "Memory",
+        "label": "Auto-Ingest Conversations",
+        "type": "select",
+        "description": "Automatically store conversation turns for future retrieval",
+        "options": ["true", "false"],
+    },
+    {
+        "key": "KNOWLEDGE_GRAPH_ENABLED",
+        "default": "true",
+        "encrypted": False,
+        "category": "Memory",
+        "label": "Enable Knowledge Graph",
+        "type": "select",
+        "description": "Extract entities and relationships from conversations",
+        "options": ["true", "false"],
+    },
     # Mem0 (Long-term Memory)
     {
         "key": "MEM0_API_KEY",
@@ -415,6 +477,117 @@ SETTINGS_SCHEMA: list[dict] = [
         "min": 3600,
         "max": 2592000,
     },
+    # Clustering (Phase 6)
+    {
+        "key": "CLUSTER_ENABLED",
+        "default": "false",
+        "encrypted": False,
+        "category": "Clustering",
+        "label": "Enable Agent Clustering",
+        "type": "select",
+        "description": "Enable Redis-based agent clustering for multi-instance coordination (requires Redis)",
+        "options": ["false", "true"],
+    },
+    {
+        "key": "REDIS_URL",
+        "default": "redis://localhost:6379",
+        "encrypted": False,
+        "category": "Clustering",
+        "label": "Redis URL",
+        "type": "text",
+        "description": "Redis connection URL (e.g. redis://localhost:6379, redis://user:pass@host:port)",
+    },
+    {
+        "key": "REDIS_PASSWORD",
+        "default": "",
+        "encrypted": True,
+        "category": "Clustering",
+        "label": "Redis Password",
+        "type": "password",
+        "description": "Redis authentication password (if required)",
+    },
+    {
+        "key": "REDIS_TLS",
+        "default": "false",
+        "encrypted": False,
+        "category": "Clustering",
+        "label": "Redis TLS",
+        "type": "select",
+        "description": "Enable TLS/SSL for Redis connection",
+        "options": ["false", "true"],
+    },
+    {
+        "key": "REDIS_KEY_PREFIX",
+        "default": "nexus:",
+        "encrypted": False,
+        "category": "Clustering",
+        "label": "Redis Key Prefix",
+        "type": "text",
+        "description": "Namespace prefix for all Redis keys (useful for shared Redis instances)",
+    },
+    {
+        "key": "CLUSTER_AGENT_ID",
+        "default": "",
+        "encrypted": False,
+        "category": "Clustering",
+        "label": "Agent ID",
+        "type": "text",
+        "description": "Unique identifier for this agent instance (auto-generated if blank)",
+    },
+    {
+        "key": "CLUSTER_ROLE",
+        "default": "auto",
+        "encrypted": False,
+        "category": "Clustering",
+        "label": "Agent Role",
+        "type": "select",
+        "description": "Role assignment: auto = first agent becomes primary, rest secondary",
+        "options": ["auto", "primary", "secondary"],
+    },
+    {
+        "key": "CLUSTER_MAX_LOAD",
+        "default": "20",
+        "encrypted": False,
+        "category": "Clustering",
+        "label": "Max Concurrent Load",
+        "type": "number",
+        "description": "Maximum concurrent requests this agent can handle",
+        "min": 1,
+        "max": 100,
+    },
+    {
+        "key": "CLUSTER_HEARTBEAT_INTERVAL",
+        "default": "2",
+        "encrypted": False,
+        "category": "Clustering",
+        "label": "Heartbeat Interval (s)",
+        "type": "number",
+        "description": "Seconds between heartbeat pings to Redis",
+        "min": 1,
+        "max": 30,
+    },
+    {
+        "key": "CLUSTER_FAILURE_THRESHOLD",
+        "default": "3",
+        "encrypted": False,
+        "category": "Clustering",
+        "label": "Failure Threshold",
+        "type": "number",
+        "description": "Missed heartbeats before an agent is considered failed",
+        "min": 2,
+        "max": 10,
+    },
+    {
+        "key": "CLUSTER_ELECTION_TIMEOUT",
+        "default": "5",
+        "encrypted": False,
+        "category": "Clustering",
+        "label": "Election Timeout (s)",
+        "type": "number",
+        "description": "Seconds to wait for election to complete during failover",
+        "min": 2,
+        "max": 30,
+    },
     # Setup
     {
         "key": "SETUP_COMPLETE",
@@ -436,6 +609,14 @@ SENSITIVE_KEYS = {s["key"] for s in SETTINGS_SCHEMA if s.get("encrypted")}
 MODEL_KEYS = {
     "ANTHROPIC_API_KEY", "CLAUDE_MODEL", "OLLAMA_BASE_URL", "OLLAMA_MODEL",
     "COMPLEXITY_THRESHOLD", "CLAUDE_CODE_ENABLED", "CLAUDE_CODE_CLI_PATH", "CLAUDE_CODE_MODEL",
+}
+
+# Keys whose change triggers cluster reconnection
+CLUSTER_KEYS = {
+    "CLUSTER_ENABLED", "REDIS_URL", "REDIS_PASSWORD", "REDIS_TLS",
+    "REDIS_KEY_PREFIX", "CLUSTER_AGENT_ID", "CLUSTER_ROLE",
+    "CLUSTER_MAX_LOAD", "CLUSTER_HEARTBEAT_INTERVAL", "CLUSTER_FAILURE_THRESHOLD",
+    "CLUSTER_ELECTION_TIMEOUT",
 }
 
 
@@ -787,3 +968,66 @@ class ConfigManager:
     @property
     def has_oauth(self):
         return bool(self.google_client_id and self.google_client_secret)
+
+    # ── Clustering Properties ────────────────────────────────────
+
+    @property
+    def cluster_enabled(self):
+        return self.get_bool("CLUSTER_ENABLED", False)
+
+    @property
+    def redis_url(self):
+        return self.get("REDIS_URL", "redis://localhost:6379")
+
+    @property
+    def redis_password(self):
+        return self.get("REDIS_PASSWORD", "")
+
+    @property
+    def redis_tls(self):
+        return self.get_bool("REDIS_TLS", False)
+
+    @property
+    def redis_key_prefix(self):
+        return self.get("REDIS_KEY_PREFIX", "nexus:")
+
+    @property
+    def cluster_agent_id(self):
+        return self.get("CLUSTER_AGENT_ID", "")
+
+    @property
+    def cluster_role(self):
+        return self.get("CLUSTER_ROLE", "auto")
+
+    @property
+    def cluster_max_load(self):
+        return self.get_int("CLUSTER_MAX_LOAD", 20)
+
+    @property
+    def cluster_heartbeat_interval(self):
+        return self.get_int("CLUSTER_HEARTBEAT_INTERVAL", 2)
+
+    @property
+    def cluster_failure_threshold(self):
+        return self.get_int("CLUSTER_FAILURE_THRESHOLD", 3)
+
+    @property
+    def cluster_election_timeout(self):
+        return self.get_int("CLUSTER_ELECTION_TIMEOUT", 5)
+
+    def get_cluster_config(self) -> dict:
+        """Return all cluster settings as a dict for ClusterManager init."""
+        return {
+            "CLUSTER_ENABLED": self.cluster_enabled,
+            "REDIS_URL": self.redis_url,
+            "REDIS_PASSWORD": self.redis_password,
+            "REDIS_TLS": self.redis_tls,
+            "REDIS_KEY_PREFIX": self.redis_key_prefix,
+            "CLUSTER_AGENT_ID": self.cluster_agent_id,
+            "CLUSTER_ROLE": self.cluster_role,
+            "CLUSTER_MAX_LOAD": self.cluster_max_load,
+            "CLUSTER_HEARTBEAT_INTERVAL": self.cluster_heartbeat_interval,
+            "CLUSTER_FAILURE_THRESHOLD": self.cluster_failure_threshold,
+            "CLUSTER_ELECTION_TIMEOUT": self.cluster_election_timeout,
+            "CLUSTER_VECTOR_DIMS": int(self.get("EMBEDDING_DIMS", "768")),
+        }

@@ -1,0 +1,37 @@
+# Nexus Cluster — Prometheus scrape configuration
+#
+# Scrapes /api/admin/cluster/metrics/prometheus from all agents
+# Default scrape interval: 15s
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+scrape_configs:
+  # Primary agent
+  - job_name: "nexus-primary"
+    metrics_path: "/api/admin/cluster/metrics/prometheus"
+    static_configs:
+      - targets: ["nexus-primary:8080"]
+        labels:
+          role: "primary"
+          cluster: "nexus"
+
+  # Secondary agents (adjust targets when scaling)
+  - job_name: "nexus-secondary"
+    metrics_path: "/api/admin/cluster/metrics/prometheus"
+    dns_sd_configs:
+      - names: ["nexus-secondary"]
+        type: "A"
+        port: 8080
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  # Redis
+  - job_name: "redis"
+    static_configs:
+      - targets: ["redis:6379"]
+    metrics_path: "/metrics"
+    # Requires redis_exporter sidecar; optional

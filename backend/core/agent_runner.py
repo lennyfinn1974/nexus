@@ -127,6 +127,31 @@ class AgentRunner:
             except Exception:
                 pass  # Never block on memory retrieval failure
 
+        # 3d. RAG — retrieve relevant memories for context enrichment
+        rag_context = ""
+        rag_pipeline = getattr(s, "rag_pipeline", None)
+        if rag_pipeline and rag_pipeline.is_active:
+            try:
+                rag_context = await rag_pipeline.retrieve(
+                    query=self.text,
+                    model=self.force_model or "ollama",
+                    limit=int(s.cfg.get("RAG_MAX_RESULTS", "5")),
+                    source_conv=self.conv_id,
+                )
+            except Exception:
+                pass  # Never block on RAG retrieval failure
+
+        # 3e. Knowledge Graph — find related entities for context
+        kg_context = ""
+        knowledge_graph = getattr(s, "knowledge_graph", None)
+        if knowledge_graph and knowledge_graph.entity_count > 0:
+            try:
+                kg_context = await knowledge_graph.query_related(
+                    text=self.text, limit=8, max_depth=2,
+                )
+            except Exception:
+                pass  # Never block on KG query failure
+
         # 4. Try each candidate model
         last_error: Exception | None = None
         compaction_retries = 0
@@ -148,6 +173,7 @@ class AgentRunner:
             system = build_system_prompt(
                 s.cfg, s.plugin_manager, tool_calling_mode=tool_mode,
                 model=model_name, memory_context=memory_context,
+                rag_context=rag_context, kg_context=kg_context,
             )
 
             # Skill context injection — @skill-name explicit invocation or auto-match

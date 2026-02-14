@@ -56,3 +56,6 @@ mem0ai>=1.0.0
 
 # Python 3.9 compatibility for PEP 604 type unions in Pydantic
 eval_type_backport>=0.2.0
+
+# Redis clustering + vector memory (Phase 6)
+redis[hiredis]>=5.0.0

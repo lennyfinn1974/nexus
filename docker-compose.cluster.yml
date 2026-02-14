@@ -1,0 +1,233 @@
+# Nexus Agent Cluster — Multi-agent development/production compose
+#
+# Usage:
+#   Development (3 agents + Redis + PostgreSQL):
+#     docker compose -f docker-compose.cluster.yml up
+#
+#   With Ollama:
+#     docker compose -f docker-compose.cluster.yml --profile with-ollama up
+#
+#   Scale secondary agents:
+#     docker compose -f docker-compose.cluster.yml up --scale nexus-secondary=4
+#
+#   Production (with TLS + monitoring):
+#     docker compose -f docker-compose.cluster.yml --profile monitoring up
+
+version: "3.9"
+
+x-nexus-common: &nexus-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+    target: production
+  environment: &nexus-env
+    HOST: "0.0.0.0"
+    PORT: "8080"
+    ADMIN_API_KEY: "${ADMIN_API_KEY:-change-me-to-a-random-secret}"
+    ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+    OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://ollama:11434}"
+    OLLAMA_MODEL: "${OLLAMA_MODEL:-kimi-k2.5:cloud}"
+    COMPLEXITY_THRESHOLD: "${COMPLEXITY_THRESHOLD:-60}"
+    ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-http://localhost:8080,http://localhost:8081,http://localhost:8082}"
+    GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
+    TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+    TELEGRAM_ALLOWED_USERS: "${TELEGRAM_ALLOWED_USERS:-}"
+    # ── Clustering ──
+    CLUSTER_ENABLED: "true"
+    REDIS_URL: "redis://redis:6379"
+    REDIS_KEY_PREFIX: "nexus:"
+    CLUSTER_HEARTBEAT_INTERVAL: "2"
+    CLUSTER_FAILURE_THRESHOLD: "3"
+    CLUSTER_ELECTION_TIMEOUT: "5"
+    CLUSTER_MIN_SECONDARIES: "1"
+    CLUSTER_MAX_LOAD: "20"
+    CLUSTER_WORKING_MEMORY_TTL: "3600"
+    CLUSTER_VECTOR_DIMS: "1536"
+    # ── Database ──
+    DATABASE_URL: "${DATABASE_URL:-postgresql+asyncpg://nexus:nexus@postgres:5432/nexus}"
+  volumes:
+    - nexus-data:/app/data
+    - ./docs:/app/docs:ro
+  restart: unless-stopped
+  depends_on:
+    redis:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+
+services:
+  # ── Redis — coordination layer ──
+  redis:
+    image: redis/redis-stack-server:7.4.0-v3
+    container_name: nexus-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --loadmodule /opt/redis-stack/lib/redisearch.so
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # ── PostgreSQL — durable storage ──
+  postgres:
+    image: postgres:16-alpine
+    container_name: nexus-postgres
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-nexus}"
+      POSTGRES_DB: nexus
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ── Primary Agent ──
+  nexus-primary:
+    <<: *nexus-common
+    container_name: nexus-primary
+    ports:
+      - "${PRIMARY_PORT:-8080}:8080"
+    environment:
+      <<: *nexus-env
+      CLUSTER_AGENT_ID: "nexus-primary"
+      CLUSTER_ROLE: "primary"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ── Secondary Agent (scalable) ──
+  nexus-secondary:
+    <<: *nexus-common
+    ports:
+      - "8081-8089:8080"
+    environment:
+      <<: *nexus-env
+      CLUSTER_ROLE: "secondary"
+      # CLUSTER_AGENT_ID left empty — auto-generates unique ID
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      replicas: 2
+
+  # ── Hot Standby Agent ──
+  nexus-standby:
+    <<: *nexus-common
+    container_name: nexus-standby
+    ports:
+      - "${STANDBY_PORT:-8090}:8080"
+    environment:
+      <<: *nexus-env
+      CLUSTER_AGENT_ID: "nexus-standby"
+      CLUSTER_ROLE: "standby"
+      CLUSTER_MAX_LOAD: "5"
+    profiles:
+      - ha
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ── Nginx Load Balancer ──
+  nginx:
+    image: nginx:alpine
+    container_name: nexus-lb
+    ports:
+      - "${LB_PORT:-80}:80"
+    volumes:
+      - ./deploy/nginx-cluster.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - nexus-primary
+      - nexus-secondary
+    restart: unless-stopped
+    profiles:
+      - lb
+
+  # ── Ollama (shared model server) ──
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nexus-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+    profiles:
+      - with-ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ── Prometheus (metrics collection) ──
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: nexus-prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # ── Grafana (dashboards) ──
+  grafana:
+    image: grafana/grafana:latest
+    container_name: nexus-grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-nexus}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+volumes:
+  nexus-data:
+    driver: local
+  redis-data:
+    driver: local
+  postgres-data:
+    driver: local
+  ollama-models:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local

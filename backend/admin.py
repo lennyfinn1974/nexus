@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Security
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 logger = logging.getLogger("nexus.admin")
@@ -94,6 +94,7 @@ _db = None  # Database
 _task_queue = None  # TaskQueue
 _catalog = None  # SkillCatalog
 _work_registry = None  # WorkRegistry
+_cluster_manager = None  # ClusterManager
 
 # In-memory log buffer for streaming
 _log_buffer: deque = deque(maxlen=500)
@@ -134,10 +135,12 @@ def init(
     audit_log=None,
     skill_catalog=None,
     work_registry=None,
+    cluster_manager=None,
 ):
     """Called from app.py during startup."""
     global _cfg, _plugins, _models, _db, _task_queue, _skills
     global _jwt_manager, _user_manager, _ip_security, _audit_log, _catalog, _work_registry
+    global _cluster_manager
     _cfg = config_manager
     _plugins = plugin_manager
     _models = model_router
@@ -150,6 +153,7 @@ def init(
     _audit_log = audit_log
     _catalog = skill_catalog
     _work_registry = work_registry
+    _cluster_manager = cluster_manager
 
     # Attach log handler to root logger
     handler = AdminLogHandler()
@@ -749,6 +753,424 @@ async def get_workstream(item_id: str):
         return JSONResponse({"error": "Work item not found"}, status_code=404)
     children = _work_registry.get_children(item_id) if _work_registry else []
     return JSONResponse({"item": item, "children": children})
+
+
+# ── Cluster Management ──────────────────────────────────────────
+
+
+@router.get("/cluster/status")
+async def get_cluster_status():
+    """Get cluster status including all agents, roles, and health."""
+    if not _cluster_manager or not _cluster_manager.is_active:
+        return JSONResponse({
+            "enabled": _cfg.cluster_enabled if _cfg else False,
+            "active": False,
+            "agent_id": None,
+            "role": None,
+            "agents": [],
+            "agent_count": 0,
+            "redis_connected": False,
+        })
+
+    status = await _cluster_manager.get_status()
+
+    # Add event bus stats if available
+    if _cluster_manager.event_bus:
+        status["event_bus"] = _cluster_manager.event_bus.get_stats()
+
+    return JSONResponse(status)
+
+
+@router.get("/cluster/agents")
+async def list_cluster_agents():
+    """List all registered agents with health info."""
+    if not _cluster_manager or not _cluster_manager.is_active:
+        return JSONResponse([])
+
+    agents = await _cluster_manager.get_agents()
+    return JSONResponse(agents)
+
+
+@router.get("/cluster/agents/{agent_id}")
+async def get_cluster_agent(agent_id: str):
+    """Get details for a specific agent."""
+    if not _cluster_manager or not _cluster_manager.registry:
+        raise HTTPException(404, "Clustering not active")
+
+    agent = await _cluster_manager.registry.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(404, f"Agent '{agent_id}' not found")
+
+    return JSONResponse(agent)
+
+
+@router.get("/cluster/tasks")
+async def get_cluster_task_streams():
+    """Get task stream info (lengths, pending, dead letters)."""
+    if not _cluster_manager or not _cluster_manager.task_stream:
+        return JSONResponse({
+            "enabled": False,
+            "streams": {},
+            "stats": {},
+        })
+
+    try:
+        streams = await _cluster_manager.task_stream.get_stream_info()
+        stats = _cluster_manager.task_stream.get_stats()
+        return JSONResponse({
+            "enabled": True,
+            "streams": streams,
+            "stats": stats,
+        })
+    except Exception as e:
+        return JSONResponse({
+            "enabled": False,
+            "error": str(e),
+        })
+
+
+@router.get("/cluster/tasks/dead")
+async def get_cluster_dead_letters(count: int = 20):
+    """Get dead letter entries for inspection."""
+    if not _cluster_manager or not _cluster_manager.task_stream:
+        return JSONResponse([])
+
+    entries = await _cluster_manager.task_stream.get_dead_letters(count=count)
+    return JSONResponse(entries)
+
+
+# ── Cluster Memory ──────────────────────────────────────────────
+
+
+@router.get("/cluster/memory")
+async def get_cluster_memory_status():
+    """Get working memory and memory index status."""
+    result = {
+        "working_memory": None,
+        "memory_index": None,
+    }
+
+    if _cluster_manager and _cluster_manager.working_memory:
+        wm = _cluster_manager.working_memory
+        result["working_memory"] = {
+            **wm.get_stats(),
+            "active_sessions": await wm.count_active_sessions(),
+        }
+
+    if _cluster_manager and _cluster_manager.memory_index:
+        mi = _cluster_manager.memory_index
+        result["memory_index"] = {
+            **mi.get_stats(),
+            "total_memories": await mi.count_memories(),
+            "memory_types": await mi.get_memory_types(),
+            "index_info": await mi.get_index_info(),
+        }
+
+    return JSONResponse(result)
+
+
+@router.get("/cluster/memory/sessions")
+async def get_cluster_active_sessions(limit: int = 50):
+    """Get active sessions in working memory."""
+    if not _cluster_manager or not _cluster_manager.working_memory:
+        return JSONResponse([])
+
+    sessions = await _cluster_manager.working_memory.get_active_sessions(limit=limit)
+    return JSONResponse(sessions)
+
+
+@router.get("/cluster/memory/sessions/{conv_id}")
+async def get_cluster_session(conv_id: str):
+    """Get a specific session from working memory."""
+    if not _cluster_manager or not _cluster_manager.working_memory:
+        return JSONResponse({"error": "Working memory not active"}, status_code=404)
+
+    session = await _cluster_manager.working_memory.get_session(conv_id)
+    if not session:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+
+    return JSONResponse(session)
+
+
+@router.get("/cluster/memory/memories")
+async def get_cluster_memories(limit: int = 20, memory_type: str = None):
+    """Get recent memories from the semantic index."""
+    if not _cluster_manager or not _cluster_manager.memory_index:
+        return JSONResponse([])
+
+    memories = await _cluster_manager.memory_index.get_recent_memories(
+        limit=limit, memory_type=memory_type
+    )
+    return JSONResponse(memories)
+
+
+@router.get("/cluster/memory/memories/{memory_id}")
+async def get_cluster_memory_item(memory_id: str):
+    """Get a specific memory by ID."""
+    if not _cluster_manager or not _cluster_manager.memory_index:
+        return JSONResponse({"error": "Memory index not active"}, status_code=404)
+
+    memory = await _cluster_manager.memory_index.get_memory(memory_id)
+    if not memory:
+        return JSONResponse({"error": "Memory not found"}, status_code=404)
+
+    return JSONResponse(memory)
+
+
+# ── Cluster Health & Election ───────────────────────────────────
+
+
+@router.get("/cluster/health")
+async def get_cluster_health_status():
+    """Get health monitor and election status."""
+    result = {
+        "health_monitor": None,
+        "election": None,
+    }
+
+    if _cluster_manager and _cluster_manager.health_monitor:
+        hm = _cluster_manager.health_monitor
+        result["health_monitor"] = {
+            **hm.get_status(),
+            "votes": await hm.get_vote_status(),
+        }
+
+    if _cluster_manager and _cluster_manager.election_manager:
+        em = _cluster_manager.election_manager
+        result["election"] = {
+            **em.get_status(),
+            "min_secondaries_met": await em.check_min_secondaries(),
+        }
+
+    return JSONResponse(result)
+
+
+@router.post("/cluster/election/trigger")
+async def trigger_cluster_election():
+    """Manually trigger an election (for testing/emergency use).
+
+    Forces the current primary to drain and a new election to begin.
+    """
+    if not _cluster_manager or not _cluster_manager.election_manager:
+        return JSONResponse(
+            {"error": "Clustering not active"},
+            status_code=400,
+        )
+
+    em = _cluster_manager.election_manager
+
+    # Find current primary
+    if _cluster_manager.registry:
+        primary = await _cluster_manager.registry.get_primary()
+        if primary:
+            result = await em.trigger_election(
+                primary["id"], primary
+            )
+            return JSONResponse({
+                "triggered": True,
+                "won": result,
+                "old_primary": primary["id"],
+                "new_role": _cluster_manager.registry.role,
+            })
+
+    return JSONResponse({
+        "triggered": False,
+        "reason": "No primary found to replace",
+    })
+
+
+@router.post("/cluster/drain")
+async def initiate_cluster_drain():
+    """Initiate graceful drain of this agent."""
+    if not _cluster_manager or not _cluster_manager.election_manager:
+        return JSONResponse(
+            {"error": "Clustering not active"},
+            status_code=400,
+        )
+
+    await _cluster_manager.election_manager.initiate_drain(reason="admin_request")
+    return JSONResponse({
+        "status": "draining",
+        "agent_id": _cluster_manager.agent_id,
+    })
+
+
+# ── Cluster Metrics ──────────────────────────────────────────────
+
+
+@router.get("/cluster/metrics")
+async def get_cluster_metrics():
+    """Get structured cluster metrics (JSON)."""
+    if not _cluster_manager or not _cluster_manager.metrics:
+        return JSONResponse(
+            {"cluster_enabled": False, "message": "Clustering not active"},
+        )
+
+    metrics = await _cluster_manager.metrics.collect()
+    rates = _cluster_manager.metrics.get_rates()
+    if rates:
+        metrics["rates"] = rates
+
+    # Add rate limiter stats
+    if _cluster_manager.rate_limiter:
+        metrics["rate_limiter"] = _cluster_manager.rate_limiter.get_stats()
+
+    return JSONResponse(metrics)
+
+
+@router.get("/cluster/metrics/prometheus")
+async def get_cluster_metrics_prometheus():
+    """Export cluster metrics in Prometheus text exposition format."""
+    if not _cluster_manager or not _cluster_manager.metrics:
+        return Response(
+            content="# nexus_cluster_enabled 0\n",
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
+
+    text = await _cluster_manager.metrics.export_prometheus()
+    return Response(
+        content=text,
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
+
+
+@router.get("/cluster/rate-limits")
+async def get_cluster_rate_limits():
+    """Get current rate limit usage across cluster."""
+    if not _cluster_manager or not _cluster_manager.rate_limiter:
+        return JSONResponse(
+            {"enabled": False, "message": "Distributed rate limiting not active"},
+        )
+
+    usage = await _cluster_manager.rate_limiter.get_all_usage()
+    stats = _cluster_manager.rate_limiter.get_stats()
+    return JSONResponse({
+        "enabled": True,
+        "stats": stats,
+        "resources": usage,
+    })
+
+
+# ── Memory & Knowledge Systems ─────────────────────────────────
+
+
+@router.get("/memory/status")
+async def get_memory_status():
+    """Get status of all memory and knowledge subsystems."""
+    from fastapi import Request
+
+    status = {
+        "passive_memory": False,
+        "embedding_service": None,
+        "rag_pipeline": None,
+        "knowledge_graph": None,
+        "working_memory": False,
+        "memory_index": False,
+    }
+
+    # Access app state via globals
+    app_state = None
+    try:
+        # Try to get from the app — the state is set on the FastAPI app
+        import sys
+        for mod_name, mod in sys.modules.items():
+            if hasattr(mod, "app") and hasattr(getattr(mod, "app", None), "state"):
+                ns = getattr(getattr(mod, "app").state, "nexus", None)
+                if ns:
+                    app_state = ns
+                    break
+    except Exception:
+        pass
+
+    if app_state:
+        status["passive_memory"] = getattr(app_state, "passive_memory", None) is not None
+
+        embed_svc = getattr(app_state, "embedding_service", None)
+        if embed_svc:
+            status["embedding_service"] = embed_svc.get_stats()
+
+        rag = getattr(app_state, "rag_pipeline", None)
+        if rag:
+            status["rag_pipeline"] = rag.get_stats()
+
+        kg = getattr(app_state, "knowledge_graph", None)
+        if kg:
+            status["knowledge_graph"] = kg.get_stats()
+
+    if _cluster_manager and _cluster_manager.is_active:
+        status["working_memory"] = _cluster_manager.working_memory is not None
+        status["memory_index"] = _cluster_manager.memory_index is not None
+
+    return JSONResponse(status)
+
+
+@router.get("/memory/knowledge-graph")
+async def get_knowledge_graph_data(max_entities: int = 100):
+    """Get knowledge graph data for visualization."""
+    app_state = _get_app_state()
+    kg = getattr(app_state, "knowledge_graph", None) if app_state else None
+    if not kg:
+        return JSONResponse({"nodes": [], "links": [], "stats": {}})
+
+    graph_data = kg.export_graph(max_entities=max_entities)
+    graph_data["stats"] = kg.get_stats()
+    return JSONResponse(graph_data)
+
+
+@router.get("/memory/knowledge-graph/entity/{name}")
+async def get_kg_entity(name: str):
+    """Look up an entity and its neighbors in the knowledge graph."""
+    app_state = _get_app_state()
+    kg = getattr(app_state, "knowledge_graph", None) if app_state else None
+    if not kg:
+        return JSONResponse({"error": "Knowledge graph not active"}, status_code=404)
+
+    entity = kg.get_entity(name)
+    if not entity:
+        return JSONResponse({"error": f"Entity '{name}' not found"}, status_code=404)
+
+    neighbors = kg.get_neighbors(entity.id)
+    return JSONResponse({
+        "entity": entity.to_dict(),
+        "neighbors": neighbors,
+    })
+
+
+@router.get("/memory/rag/search")
+async def rag_search(q: str, limit: int = 5):
+    """Search the RAG memory index."""
+    app_state = _get_app_state()
+    rag = getattr(app_state, "rag_pipeline", None) if app_state else None
+    if not rag or not rag.is_active:
+        return JSONResponse({"error": "RAG pipeline not active", "results": []})
+
+    try:
+        embed_svc = getattr(app_state, "embedding_service", None)
+        if not embed_svc:
+            return JSONResponse({"error": "Embedding service not available", "results": []})
+
+        embedding = await embed_svc.embed(q)
+        if not embedding:
+            return JSONResponse({"error": "Failed to generate embedding", "results": []})
+
+        results = await rag.cluster.search_memory(embedding, limit=limit)
+        return JSONResponse({"query": q, "results": results})
+    except Exception as e:
+        return JSONResponse({"error": str(e), "results": []})
+
+
+def _get_app_state():
+    """Get the Nexus AppState from the running application."""
+    try:
+        import sys
+        for mod_name, mod in sys.modules.items():
+            if hasattr(mod, "app") and hasattr(getattr(mod, "app", None), "state"):
+                ns = getattr(getattr(mod, "app").state, "nexus", None)
+                if ns:
+                    return ns
+    except Exception:
+        pass
+    return None
 
 
 # ── System ──────────────────────────────────────────────────────

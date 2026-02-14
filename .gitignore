@@ -31,6 +31,10 @@ Thumbs.db
 # Node
 node_modules/
 
+# Build output (Vite hashed assets — rebuilt on deploy)
+frontend/chat-build/assets/
+frontend/admin-build/assets/
+
 # Python
 *.egg-info/
 dist/

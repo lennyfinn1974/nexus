@@ -59,6 +59,8 @@ def build_system_prompt(
     tool_calling_mode: str = "native",
     model: str = "claude",
     memory_context: str = "",
+    rag_context: str = "",
+    kg_context: str = "",
 ) -> str:
     """Build the full system prompt from config, plugins, and tool mode."""
     name = cfg.agent_name if cfg else "Nexus"
@@ -217,6 +219,14 @@ the results. Don't just dump raw tool output on the user."""
     # Inject passive memory context (learned preferences + project context)
     if memory_context:
         prompt += f"\n\n## What I Know About You\n{memory_context}"
+
+    # Inject RAG context (retrieved relevant memories)
+    if rag_context:
+        prompt += f"\n\n## Retrieved Context\nThe following information was retrieved from memory and may be relevant:\n\n{rag_context}"
+
+    # Inject Knowledge Graph context (related entities)
+    if kg_context:
+        prompt += f"\n\n{kg_context}"
 
     # In legacy mode, append text-based tool descriptions from plugins.
     # In native mode, skip this — tool definitions are sent via the API.

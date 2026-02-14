@@ -414,6 +414,14 @@ async def _handle_set_conversation(ws_id: str, msg: dict, s: Any) -> None:
         if conv:
             websocket_manager.update_session_data(ws_id, {"conv_id": new_id})
             logger.info(f"[{ws_id}] Switched to conversation {new_id}")
+
+            # ── Cluster: touch session (marks it active, reads context) ──
+            cm = getattr(s, "cluster_manager", None)
+            if cm and cm.is_active:
+                try:
+                    await cm.working_memory.touch_session(new_id)
+                except Exception:
+                    pass
             await websocket_manager.send_to_client(
                 ws_id,
                 {
@@ -479,17 +487,59 @@ async def _handle_user_message(
             },
         )
 
+    # ── Cluster: claim work + store session ──
+    cm = getattr(s, "cluster_manager", None)
+    if cm and cm.is_active:
+        try:
+            await cm.working_memory.claim_work(conv_id, task_type="conversation")
+            await cm.store_session(conv_id, {
+                "ws_id": ws_id,
+                "message_count": msg_count,
+                "force_model": force_model,
+                "last_user_message": text[:200],
+            })
+        except Exception as e:
+            logger.debug(f"Cluster session write failed (non-blocking): {e}")
+
     # Run the agent
     runner = AgentRunner(s, ws_id, conv_id, text, force_model)
     final_response = await runner.run()
 
     await s.db.add_message(conv_id, "assistant", final_response, model_used="agent")
 
+    # ── Cluster: update session with response metadata + release work ──
+    if cm and cm.is_active:
+        try:
+            new_count = await s.db.get_message_count(conv_id)
+            await cm.working_memory.update_session(conv_id, {
+                "message_count": new_count,
+                "last_model": getattr(runner, "_last_model", "unknown"),
+                "last_response_len": len(final_response),
+            })
+            await cm.working_memory.release_work(conv_id)
+        except Exception as e:
+            logger.debug(f"Cluster session update failed (non-blocking): {e}")
+
     # Passive memory extraction — runs in background, never blocks response
     passive_mem = getattr(s, "passive_memory", None)
     if passive_mem:
         asyncio.create_task(
             _extract_passive_memory(passive_mem, conv_id, text, final_response)
+        )
+
+    # RAG ingest — store conversation turn for future retrieval
+    rag_pipeline = getattr(s, "rag_pipeline", None)
+    auto_ingest = s.cfg.get_bool("RAG_AUTO_INGEST", True) if s.cfg else True
+    if rag_pipeline and rag_pipeline.is_active and auto_ingest:
+        asyncio.create_task(
+            _rag_ingest(rag_pipeline, conv_id, text, final_response)
+        )
+
+    # Knowledge Graph extraction — extract entities + relationships
+    knowledge_graph = getattr(s, "knowledge_graph", None)
+    if knowledge_graph:
+        asyncio.create_task(
+            _kg_extract(knowledge_graph, conv_id, text, final_response)
         )
 
     return runner
@@ -504,3 +554,36 @@ async def _extract_passive_memory(extractor, conv_id: str, user_msg: str, assist
             logger.debug(f"Passive memory: learned {total} items from {conv_id}")
     except Exception as e:
         logger.debug(f"Passive memory extraction failed: {e}")
+
+
+async def _rag_ingest(rag_pipeline, conv_id: str, user_msg: str, assistant_msg: str):
+    """Background task: ingest conversation turn into RAG memory index."""
+    try:
+        memory_id = await rag_pipeline.ingest_conversation(
+            conv_id=conv_id,
+            user_message=user_msg,
+            assistant_response=assistant_msg,
+        )
+        if memory_id:
+            logger.debug(f"RAG ingested: {memory_id} from {conv_id[:8]}")
+    except Exception as e:
+        logger.debug(f"RAG ingest failed: {e}")
+
+
+async def _kg_extract(knowledge_graph, conv_id: str, user_msg: str, assistant_msg: str):
+    """Background task: extract entities and relationships into knowledge graph."""
+    try:
+        combined = f"{user_msg}\n\n{assistant_msg}"
+        result = await knowledge_graph.extract_and_store(
+            text=combined,
+            source_conv=conv_id,
+        )
+        entity_count = len(result.get("entities", []))
+        rel_count = len(result.get("relationships", []))
+        if entity_count > 0:
+            logger.debug(
+                f"KG extracted: {entity_count} entities, {rel_count} relationships "
+                f"from {conv_id[:8]}"
+            )
+    except Exception as e:
+        logger.debug(f"KG extraction failed: {e}")
