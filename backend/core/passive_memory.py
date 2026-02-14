@@ -201,7 +201,7 @@ class PassiveMemoryExtractor:
         except Exception as e:
             logger.debug(f"Failed to store interaction pattern: {e}")
 
-    async def get_context_for_prompt(self, limit: int = 10) -> str:
+    async def get_context_for_prompt(self, limit: int = 5) -> str:
         """Build context string from stored memories for injection into system prompt.
 
         Returns a concise summary of known preferences and project context.
@@ -244,4 +244,7 @@ class PassiveMemoryExtractor:
         except Exception as e:
             logger.debug(f"Failed to get context for prompt: {e}")
 
-        return "\n\n".join(parts)
+        result = "\n\n".join(parts)
+        if len(result) > 1600:
+            result = result[:1600] + "\n...(memory truncated)"
+        return result

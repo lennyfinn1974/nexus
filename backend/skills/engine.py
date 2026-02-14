@@ -399,6 +399,30 @@ class SkillsEngine:
 
         return "\n".join(parts)
 
+    async def build_skill_directory(self, message: str) -> str:
+        """Build a lightweight skill directory — names + descriptions only.
+
+        Instead of injecting full knowledge (up to 2000 chars each × 5 skills),
+        this returns just the skill ID, name, and description (~50 tokens/skill).
+        The model can load full knowledge on demand via skill_get_knowledge tool.
+        Saves ~8000 tokens vs build_skill_context() on Ollama's 32K window.
+        """
+        relevant = await self.find_relevant_skills(message)
+        if not relevant:
+            return ""
+
+        parts = ["## Relevant Skills (use skill_get_knowledge to load details)\n"]
+        for skill, _score in relevant:
+            actions_hint = ""
+            if skill.actions:
+                action_names = [a.name for a in skill.actions]
+                actions_hint = f" | Actions: {', '.join(action_names)}"
+            parts.append(
+                f"- **{skill.name}** (`{skill.id}`): {skill.description}{actions_hint}"
+            )
+
+        return "\n".join(parts)
+
     async def execute_action(self, action_name: str, params: dict) -> str:
         """Find and run a skill action by name, with audit logging."""
         import asyncio as _asyncio

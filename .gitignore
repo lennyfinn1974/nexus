@@ -3,6 +3,7 @@
 venv/
 __pycache__/
 *.pyc
+*.pyo
 
 # Secrets
 .nexus_secret
@@ -24,12 +25,30 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # Node
 node_modules/
-admin-ui/node_modules/
-chat-ui/node_modules/
 
-# Build output
-frontend/admin-build/
-frontend/chat-build/
+# Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Claude Code
+.claude/
+
+# Playwright cache
+backend/core/__pycache__/
+
+# Temp files
+*.tmp
+*.bak
+*.backup

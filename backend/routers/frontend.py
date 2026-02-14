@@ -37,23 +37,34 @@ def init(base_dir: str) -> None:
 
 
 def _serve_chat_spa():
-    """Return the React chat SPA, falling back to vanilla index.html."""
-    # React SPA build (production)
+    """Return the React chat SPA."""
     spa_path = os.path.join(BASE_DIR, "frontend", "chat-build", "index.html")
     if os.path.exists(spa_path):
         with open(spa_path) as f:
             return HTMLResponse(f.read(), headers=_NO_CACHE)
-    # Fallback to vanilla index.html
-    legacy_path = os.path.join(BASE_DIR, "frontend", "index.html")
-    if os.path.exists(legacy_path):
-        with open(legacy_path) as f:
-            return HTMLResponse(f.read(), headers=_NO_CACHE)
-    return HTMLResponse("<h1>Nexus</h1><p>Frontend not found.</p>")
+    return HTMLResponse(
+        "<h1>Nexus</h1><p>Chat UI not built. Run: <code>cd chat-ui && npm run build</code></p>"
+    )
 
 
 @router.get("/", response_class=HTMLResponse)
 async def serve_ui():
     return _serve_chat_spa()
+
+
+@router.get("/favicon.svg")
+async def serve_favicon():
+    """Serve the Nexus favicon."""
+    for build_dir in ("chat-build", "admin-build"):
+        path = os.path.join(BASE_DIR, "frontend", build_dir, "favicon.svg")
+        if os.path.isfile(path):
+            return FileResponse(path, media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
+    # Inline fallback — the N logo
+    return HTMLResponse(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#f97316"/><text x="16" y="23" text-anchor="middle" font-family="DM Sans,sans-serif" font-weight="700" font-size="20" fill="white">N</text></svg>',
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @router.get("/chat/{path:path}")
@@ -83,29 +94,15 @@ async def serve_root_assets(path: str):
     return HTMLResponse("Not found", status_code=404)
 
 
-@router.get("/classic", response_class=HTMLResponse)
-async def serve_classic_ui():
-    """Serve the original vanilla JS chat UI."""
-    legacy_path = os.path.join(BASE_DIR, "frontend", "index.html")
-    if os.path.exists(legacy_path):
-        with open(legacy_path) as f:
-            return HTMLResponse(f.read(), headers=_NO_CACHE)
-    return HTMLResponse("<h1>Classic UI not found</h1>")
-
-
 def _serve_admin_spa():
-    """Return the React SPA index.html, falling back to legacy admin.html."""
-    # React SPA build (production)
+    """Return the React admin SPA."""
     spa_path = os.path.join(BASE_DIR, "frontend", "admin-build", "index.html")
     if os.path.exists(spa_path):
         with open(spa_path) as f:
             return HTMLResponse(f.read(), headers=_NO_CACHE)
-    # Fallback to legacy admin.html
-    legacy_path = os.path.join(BASE_DIR, "frontend", "admin.html")
-    if os.path.exists(legacy_path):
-        with open(legacy_path) as f:
-            return HTMLResponse(f.read(), headers=_NO_CACHE)
-    return HTMLResponse("<h1>Admin panel not found</h1>")
+    return HTMLResponse(
+        "<h1>Admin panel not built. Run: <code>cd admin-ui && npm run build</code></h1>"
+    )
 
 
 @router.get("/admin", response_class=HTMLResponse)

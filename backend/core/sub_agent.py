@@ -858,6 +858,15 @@ class SubAgentOrchestrator:
         if len(completed) == 1:
             return list(completed.values())[0].output
 
+        # If a synthesizer sub-agent already ran and succeeded, use its output directly
+        # (avoids double-synthesis where we'd call another LLM to re-merge)
+        synth_results = [
+            r for r in completed.values()
+            if r.role == SubAgentRole.SYNTHESIZER and r.output
+        ]
+        if synth_results:
+            return synth_results[0].output
+
         # Build/Review: if reviewer rates high (>7), return builder output with review notes
         if orchestration.strategy in ("build_review", "build_review_code"):
             builder_result = None
@@ -912,21 +921,47 @@ class SubAgentOrchestrator:
             return "\n\n---\n\n".join(parts)
 
     def _resolve_prompt(self, spec: SubAgentSpec, orchestration: Orchestration) -> str:
-        """Replace {{result:spec_id}} placeholders with actual results."""
+        """Replace {{result:spec_id}} placeholders with actual results.
+
+        If the prompt has no explicit placeholders but has dependencies,
+        automatically appends all dependency results so the sub-agent has context.
+        """
         prompt = spec.prompt
-        for dep_id in spec.depends_on:
-            placeholder = f"{{{{result:{dep_id}}}}}"
-            if dep_id in orchestration.results:
-                dep_result = orchestration.results[dep_id]
-                if dep_result.status == SubAgentStatus.COMPLETED:
-                    prompt = prompt.replace(placeholder, dep_result.output)
+        has_placeholders = "{{result:" in prompt
+
+        if has_placeholders:
+            # Explicit placeholders — replace them
+            for dep_id in spec.depends_on:
+                placeholder = f"{{{{result:{dep_id}}}}}"
+                if dep_id in orchestration.results:
+                    dep_result = orchestration.results[dep_id]
+                    if dep_result.status == SubAgentStatus.COMPLETED:
+                        prompt = prompt.replace(placeholder, dep_result.output)
+                    else:
+                        prompt = prompt.replace(
+                            placeholder,
+                            f"[{dep_result.role.value} failed: {dep_result.error}]",
+                        )
                 else:
-                    prompt = prompt.replace(
-                        placeholder,
-                        f"[{dep_result.role.value} failed: {dep_result.error}]",
-                    )
-            else:
-                prompt = prompt.replace(placeholder, "[result not available]")
+                    prompt = prompt.replace(placeholder, "[result not available]")
+        elif spec.depends_on:
+            # No placeholders but has dependencies — auto-append results
+            dep_sections = []
+            for dep_id in spec.depends_on:
+                if dep_id in orchestration.results:
+                    dep_result = orchestration.results[dep_id]
+                    if dep_result.status == SubAgentStatus.COMPLETED and dep_result.output:
+                        role_label = dep_result.role.value.capitalize()
+                        dep_sections.append(
+                            f"## {role_label} ({dep_result.model_used})\n{dep_result.output}"
+                        )
+                    elif dep_result.error:
+                        dep_sections.append(
+                            f"## {dep_result.role.value.capitalize()} [FAILED]\n{dep_result.error}"
+                        )
+            if dep_sections:
+                prompt += "\n\n---\n\n" + "\n\n".join(dep_sections)
+
         return prompt
 
     @staticmethod

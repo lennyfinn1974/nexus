@@ -200,24 +200,79 @@ class ModelRouter:
             return self.claude_code
         return self.ollama
 
+    @staticmethod
+    def _sanitize_messages_for_claude(messages: list) -> list:
+        """Strip Ollama-format tool messages that Claude can't understand.
+
+        Ollama uses {"role": "tool", ...} and assistant messages with
+        {"tool_calls": [...]} — Claude expects tool_use/tool_result content
+        blocks. On failover we drop tool interaction messages and keep only
+        the plain text conversation so Claude can still answer.
+        """
+        clean = []
+        for msg in messages:
+            role = msg.get("role", "")
+            # Skip Ollama tool result messages
+            if role == "tool":
+                continue
+            # Strip tool_calls from assistant messages
+            if role == "assistant" and "tool_calls" in msg:
+                content = msg.get("content", "")
+                if content:
+                    clean.append({"role": "assistant", "content": content})
+                continue
+            clean.append(msg)
+        return clean
+
+    @staticmethod
+    def _sanitize_messages_for_ollama(messages: list) -> list:
+        """Strip Anthropic-format tool messages that Ollama can't understand.
+
+        Anthropic uses content blocks [{"type": "tool_use"}, ...] and
+        [{"type": "tool_result"}, ...]. On failover we keep only plain text.
+        """
+        clean = []
+        for msg in messages:
+            content = msg.get("content", "")
+            # If content is a list (Anthropic content blocks), extract text only
+            if isinstance(content, list):
+                text_parts = [b.get("text", "") for b in content if b.get("type") == "text"]
+                text = " ".join(t for t in text_parts if t)
+                if text:
+                    clean.append({"role": msg["role"], "content": text})
+                continue
+            clean.append(msg)
+        return clean
+
     async def chat(
         self,
         messages: list,
         system: str | None = None,
         force_model: str | None = None,
         tools: list[dict] | None = None,
+        fallback_tools: list[dict] | None = None,
     ) -> dict:
-        """Route a chat request with timeout handling and tool support."""
+        """Route a chat request with timeout handling and tool support.
+
+        Args:
+            messages: Conversation messages.
+            system: System prompt.
+            force_model: Override model selection.
+            tools: Tool definitions in the primary model's format.
+            fallback_tools: Tool definitions for the fallback model's format.
+                If not provided, tools are dropped on fallback to avoid
+                format incompatibility.
+        """
         last_message = messages[-1]["content"] if messages else ""
         model_name = self.select_model(last_message, force_model)
         client = self._get_client(model_name)
 
         logger.info(f"Routing to: {model_name} (timeout: {self.timeout_seconds}s)")
 
-        async def _try(c: Any, name: str) -> dict:
+        async def _try(c: Any, name: str, t: list[dict] | None = None, msgs: list | None = None) -> dict:
             try:
                 result = await asyncio.wait_for(
-                    c.chat(messages, system, tools=tools),
+                    c.chat(msgs or messages, system, tools=t),
                     timeout=self.timeout_seconds,
                 )
                 result["routed_to"] = name
@@ -230,14 +285,21 @@ class ModelRouter:
                 raise
 
         try:
-            return await _try(client, model_name)
+            return await _try(client, model_name, tools)
         except Exception as e:
             fallback = "claude" if model_name == "ollama" else "ollama"
             if (fallback == "claude" and self._claude_available) or (fallback == "ollama" and self._ollama_available):
                 logger.warning(f"Trying fallback to {fallback}...")
                 fb_client = self._get_client(fallback)
+                # Sanitize messages for the fallback model
+                if fallback == "claude":
+                    fb_messages = self._sanitize_messages_for_claude(messages)
+                else:
+                    fb_messages = self._sanitize_messages_for_ollama(messages)
+                # Use fallback_tools if provided, otherwise drop tools
+                fb_tools = fallback_tools
                 try:
-                    result = await _try(fb_client, fallback)
+                    result = await _try(fb_client, fallback, fb_tools, fb_messages)
                     result["fallback"] = True
                     result["fallback_reason"] = str(e)
                     return result

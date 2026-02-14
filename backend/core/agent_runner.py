@@ -118,6 +118,15 @@ class AgentRunner:
         if should_orch:
             return await self._run_orchestrated(messages, strategy)
 
+        # 3c. Retrieve passive memory context (lightweight, ~200-400 tokens)
+        memory_context = ""
+        passive_mem = getattr(s, "passive_memory", None)
+        if passive_mem:
+            try:
+                memory_context = await passive_mem.get_context_for_prompt(limit=5)
+            except Exception:
+                pass  # Never block on memory retrieval failure
+
         # 4. Try each candidate model
         last_error: Exception | None = None
         compaction_retries = 0
@@ -137,7 +146,8 @@ class AgentRunner:
             tool_mode = "native" if use_native_tools else "legacy"
 
             system = build_system_prompt(
-                s.cfg, s.plugin_manager, tool_calling_mode=tool_mode, model=model_name,
+                s.cfg, s.plugin_manager, tool_calling_mode=tool_mode,
+                model=model_name, memory_context=memory_context,
             )
 
             # Skill context injection — @skill-name explicit invocation or auto-match
@@ -145,8 +155,8 @@ class AgentRunner:
             if skill_context:
                 system += f"\n\n{skill_context}"
             else:
-                # No @ skills — fall back to automatic skill matching
-                auto_context = await s.skills_engine.build_skill_context(self.text)
+                # No @ skills — lightweight directory (model loads on demand)
+                auto_context = await s.skills_engine.build_skill_directory(self.text)
                 if auto_context:
                     system += f"\n\n{auto_context}"
 
@@ -342,6 +352,25 @@ class AgentRunner:
         )
 
         result = await orchestrator.execute(orchestration)
+
+        # Send the synthesised output to the WebSocket as a stream
+        # (sub-agent progress messages were sent during execution,
+        #  but the final merged result needs its own stream_start/chunk/end
+        #  so the Chat UI displays it as the assistant response)
+        if self.ws_id and result:
+            await websocket_manager.send_to_client(
+                self.ws_id,
+                {"type": "stream_start", "model": "multi-agent"},
+            )
+            await websocket_manager.send_to_client(
+                self.ws_id,
+                {"type": "stream_chunk", "content": result},
+            )
+            await websocket_manager.send_to_client(
+                self.ws_id,
+                {"type": "stream_end", "model": "multi-agent"},
+            )
+
         return result
 
     @staticmethod

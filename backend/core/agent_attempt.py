@@ -106,9 +106,10 @@ class AgentAttempt:
                 logger.warning(f"[{self.ws_id}] Hit max tool rounds ({MAX_TOOL_ROUNDS})")
                 break
 
+            # Send tool completion as a non-visible event (not a system message)
             await websocket_manager.send_to_client(
                 self.ws_id,
-                {"type": "system", "content": f"Executed {len(tool_results)} tool(s)..."},
+                {"type": "tool_status", "status": "complete", "count": len(tool_results)},
             )
 
             # Truncate oversized tool results to fit context window
@@ -219,9 +220,11 @@ class AgentAttempt:
                 tool_input = tc.get("input", {})
                 tool_id = tc.get("id", "")
 
+                # Send tool status as a non-visible event (not a system message)
+                # The chat UI shows a typing indicator during streaming instead
                 await websocket_manager.send_to_client(
                     self.ws_id,
-                    {"type": "system", "content": f"Running tool: {tool_name}..."},
+                    {"type": "tool_status", "tool": tool_name, "status": "running"},
                 )
 
                 try:
@@ -253,17 +256,18 @@ class AgentAttempt:
 
         # Legacy regex-based tool calls (fallback for text-based tool_call tags)
         if not tool_results and full_response:
-            from core.message_processor import process_skill_actions
+            if state.plugin_manager:
+                cleaned, plugin_results = await state.plugin_manager.process_tool_calls(
+                    full_response
+                )
+                if plugin_results:
+                    tool_results.extend(plugin_results)
 
-            cleaned, plugin_results = await state.plugin_manager.process_tool_calls(
-                full_response
-            )
-            if plugin_results:
-                tool_results.extend(plugin_results)
-
-            skill_results = await process_skill_actions(full_response, state.skills_engine)
-            if skill_results:
-                tool_results.extend(skill_results)
+            if state.skills_engine:
+                from core.message_processor import process_skill_actions
+                skill_results = await process_skill_actions(full_response, state.skills_engine)
+                if skill_results:
+                    tool_results.extend(skill_results)
 
         return tool_results
 

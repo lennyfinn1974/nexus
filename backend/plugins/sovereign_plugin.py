@@ -28,11 +28,14 @@ class SovereignPlugin(NexusPlugin):
         super().__init__(config, db, router)
         self._available = False
         self._sovereign = None
-        self._workspace_path = os.path.expanduser("~/.openclaw/workspace/sovereign-core/")
+        self._workspace_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "data", "sovereign"
+        )
         self._active_procedure = None
 
     async def setup(self):
-        """Try to import sovereign module from OpenClaw workspace.
+        """Try to import sovereign module from workspace.
 
         Sovereign-core uses bare imports like ``from storage import SovereignStorage``
         which collide with Nexus's own ``backend/storage`` package.  To work around
@@ -494,7 +497,7 @@ class SovereignPlugin(NexusPlugin):
     async def _search_workspace(self, params):
         """Search the Sovereign workspace."""
         if not self._available:
-            return "⚠️  Sovereign not available. Install at ~/.openclaw/workspace/sovereign-core/"
+            return "⚠️  Sovereign not available. Workspace not found."
 
         query = params.get("query", "").strip()
         limit = int(params.get("limit", "10"))
@@ -539,7 +542,7 @@ class SovereignPlugin(NexusPlugin):
     async def _get_status(self, params):
         """Get Sovereign system status."""
         if not self._available:
-            return "⚠️  Sovereign not available. Install at ~/.openclaw/workspace/sovereign-core/"
+            return "⚠️  Sovereign not available. Workspace not found."
 
         try:
             status_info = [
@@ -573,7 +576,7 @@ class SovereignPlugin(NexusPlugin):
     async def _save_memory(self, params):
         """Save persistent memory."""
         if not self._available:
-            return "⚠️  Sovereign not available. Install at ~/.openclaw/workspace/sovereign-core/"
+            return "⚠️  Sovereign not available. Workspace not found."
 
         key = params.get("key", "").strip()
         content = params.get("content", "")
@@ -602,7 +605,7 @@ class SovereignPlugin(NexusPlugin):
     async def _load_memory(self, params):
         """Load persistent memory."""
         if not self._available:
-            return "⚠️  Sovereign not available. Install at ~/.openclaw/workspace/sovereign-core/"
+            return "⚠️  Sovereign not available. Workspace not found."
 
         key = params.get("key", "").strip()
         if not key:

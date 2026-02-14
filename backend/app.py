@@ -327,6 +327,21 @@ async def lifespan(app: FastAPI):
     if catalog_plugin and hasattr(catalog_plugin, "set_catalog"):
         catalog_plugin.set_catalog(state.skill_catalog, state.skills_engine)
 
+    # Headless browser renderer (Playwright — lazy init on first use)
+    try:
+        from core.headless import HeadlessRenderer
+        state.headless_renderer = HeadlessRenderer()
+        # Inject into Brave plugin for auto-fallback on JS-heavy sites
+        brave_plugin = state.plugin_manager.plugins.get("brave")
+        if brave_plugin and hasattr(brave_plugin, "set_headless"):
+            brave_plugin.set_headless(state.headless_renderer)
+            logger.info("Headless renderer available for web_fetch fallback")
+        else:
+            logger.info("Headless renderer initialized (no Brave plugin to inject into)")
+    except ImportError:
+        state.headless_renderer = None
+        logger.info("Headless renderer: Playwright not installed (optional)")
+
     # Tool executor (Phase 6)
     try:
         from core.tool_executor import ToolExecutor
@@ -375,6 +390,7 @@ async def lifespan(app: FastAPI):
                     plugin_manager=state.plugin_manager,
                     skill_catalog=getattr(state, "skill_catalog", None),
                     conv_id=conv_id,
+                    passive_memory=getattr(state, "passive_memory", None),
                 )
 
             state.telegram_channel = TelegramChannel(
@@ -438,6 +454,8 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ──
     logger.info("Shutting down...")
+    if getattr(state, "headless_renderer", None):
+        await state.headless_renderer.close()
     if getattr(state, "reminder_manager", None):
         state.reminder_manager.stop()
     if getattr(state, "task_queue", None):

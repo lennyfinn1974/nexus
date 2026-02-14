@@ -120,9 +120,16 @@ class BraveBrowserPlugin(NexusPlugin):
         )
         self.add_tool(
             "web_fetch",
-            "Fetch a URL directly via HTTP and extract its text content (reliable — works without browser). Best for reading web page content.",
+            "Fetch a URL directly via HTTP and extract its text content as structured Markdown. Returns headings, lists, links, and page hierarchy. Best for reading web page content.",
             {"url": "URL to fetch"},
             self._web_fetch,
+            category="web",
+        )
+        self.add_tool(
+            "web_fetch_rendered",
+            "Fetch and render a JavaScript-heavy website using headless browser. Use when web_fetch returns sparse content or '⚠️ JavaScript-heavy site' warning. Returns fully rendered page content.",
+            {"url": "URL to render"},
+            self._web_fetch_rendered,
             category="web",
         )
 
@@ -322,25 +329,19 @@ class BraveBrowserPlugin(NexusPlugin):
             title_result = await self._brave_get_title(params)
             title = title_result.replace("Page title: ", "").strip() if "Page title:" in title_result else ""
 
-            # Use web_fetch as fallback
+            # Use web_fetch as fallback (now with smart extraction + auto headless)
             fetch_result = await self._web_fetch({"url": url})
-            if fetch_result.startswith("⚠️") or fetch_result.startswith("Error"):
+            if fetch_result.startswith("Error"):
                 return f"Could not extract page content.\nJS error: {result}\nFetch error: {fetch_result}"
 
-            # Check if the fetched content is very sparse (JS-heavy SPA)
-            # Strip the URL header line from fetch_result to measure actual content
-            content_lines = fetch_result.split("\n", 2)
-            raw_text = content_lines[2] if len(content_lines) > 2 else ""
-            if len(raw_text.strip()) < 200:
-                sparse_note = (
-                    f"\n\n⚠️ **Note:** This appears to be a JavaScript-heavy site. "
-                    f"The raw HTML has minimal text content. "
-                    f"Page title from browser: **{title}**\n"
-                    f"URL: {url}\n"
-                    f"To get full content, enable JavaScript from Apple Events in Brave: "
-                    f"View → Developer → Allow JavaScript from Apple Events."
-                )
-                return fetch_result + sparse_note
+            # web_extract already handles sparse detection + headless fallback
+            # Just append browser title if available and content is sparse
+            try:
+                from core.web_extract import is_sparse_content
+                if is_sparse_content(fetch_result) and title:
+                    fetch_result += f"\n**Page title from browser:** {title}"
+            except ImportError:
+                pass
 
             return fetch_result
 
@@ -480,19 +481,44 @@ class BraveBrowserPlugin(NexusPlugin):
                 if "html" in content_type or "text" in content_type:
                     html = response.text
 
-                    # Simple HTML tag removal
-                    text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.IGNORECASE)
-                    text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
-                    text = re.sub(r"<[^>]+>", "", text)
+                    # Smart extraction via BeautifulSoup + html2text → Markdown
+                    try:
+                        from core.web_extract import extract_content, is_sparse_content
 
-                    # Clean up whitespace
-                    text = re.sub(r"\n\s*\n", "\n\n", text)
-                    text = text.strip()
+                        text = extract_content(html, url=url, max_chars=8000)
 
-                    if len(text) > 10000:
-                        text = text[:10000] + "\n\n... (truncated to 10000 chars)"
+                        # Auto-detect JS-heavy SPAs (sparse content)
+                        if is_sparse_content(text):
+                            # Try headless browser if available
+                            headless = getattr(self, "_headless_renderer", None)
+                            if headless:
+                                try:
+                                    rendered = await headless.render(url, max_chars=8000)
+                                    if rendered and not is_sparse_content(rendered):
+                                        logger.info(f"Headless render succeeded for {url}")
+                                        return rendered
+                                except Exception as he:
+                                    logger.warning(f"Headless render failed for {url}: {he}")
 
-                    return f"📄 **{url}**\n\n{text}"
+                            # Append sparse content warning
+                            text += (
+                                "\n\n⚠️ **Note:** This appears to be a JavaScript-heavy site. "
+                                "The raw HTML has minimal text content. "
+                                "Use `web_fetch_rendered` for full JS-rendered content."
+                            )
+
+                        return text
+                    except Exception as extract_err:
+                        logger.warning(f"Smart extraction failed, falling back to regex: {extract_err}")
+                        # Fallback to regex stripping
+                        text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.IGNORECASE)
+                        text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
+                        text = re.sub(r"<[^>]+>", "", text)
+                        text = re.sub(r"\n\s*\n", "\n\n", text)
+                        text = text.strip()
+                        if len(text) > 10000:
+                            text = text[:10000] + "\n\n... (truncated to 10000 chars)"
+                        return f"📄 **{url}**\n\n{text}"
                 else:
                     return f"⚠️ Unsupported content type: {content_type}"
 
@@ -500,6 +526,39 @@ class BraveBrowserPlugin(NexusPlugin):
             return "Error: httpx not installed. Run: pip install httpx"
         except Exception as e:
             return f"Web fetch error: {e}"
+
+    async def _web_fetch_rendered(self, params):
+        """Fetch and render a JS-heavy website using headless browser."""
+        url = params.get("url", "").strip()
+        if not url:
+            return "Error: url is required"
+
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+
+        headless = getattr(self, "_headless_renderer", None)
+        if not headless:
+            return (
+                "⚠️ Headless browser not available. "
+                "Install Playwright: `pip3 install playwright && python3 -m playwright install chromium`\n"
+                "Falling back to HTTP fetch..."
+            ) + "\n\n" + await self._web_fetch(params)
+
+        try:
+            result = await headless.render(url, max_chars=8000)
+            if result:
+                return result
+            else:
+                logger.warning(f"Headless returned empty for {url}, falling back to HTTP")
+                return await self._web_fetch(params)
+        except Exception as e:
+            logger.error(f"Headless render error for {url}: {e}")
+            return f"Headless render failed: {e}\n\nFalling back to HTTP...\n\n" + await self._web_fetch(params)
+
+    def set_headless(self, renderer):
+        """Inject headless renderer (called from app.py lifespan)."""
+        self._headless_renderer = renderer
+        logger.info("Headless renderer injected into Brave plugin")
 
     # ────────────────────────────────────────────
     # Command Handlers

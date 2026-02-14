@@ -58,6 +58,7 @@ def build_system_prompt(
     plugin_manager: PluginManager | None = None,
     tool_calling_mode: str = "native",
     model: str = "claude",
+    memory_context: str = "",
 ) -> str:
     """Build the full system prompt from config, plugins, and tool mode."""
     name = cfg.agent_name if cfg else "Nexus"
@@ -73,11 +74,19 @@ def build_system_prompt(
 
     current_datetime = _get_current_datetime(cfg)
 
+    model_labels = {
+        "ollama": "Ollama (kimi-k2.5, running locally)",
+        "claude": "Claude API (Anthropic, cloud)",
+        "claude_code": "Claude Code (agentic mode with MCP tools)",
+    }
+    current_model = model_labels.get(model, model)
+
     prompt = f"""You are **{name}**, an autonomous AI agent running on the Nexus platform. You are helpful, capable, and direct.
-Your name is {name} — always use this name when introducing yourself. Nexus is your platform, not your name. Never refer to yourself as OpenClaw.
+Your name is {name} — always use this name when introducing yourself. Nexus is your platform, not your name.
 You are the same agent across all channels (chat UI, Telegram, etc.) — same brain, same memory, same conversation history.
 
 **Current date/time:** {current_datetime}
+**Running on:** {current_model}
 
 You have real capabilities -- you can execute code, read and write files, search the web,
 browse pages, control macOS, manage terminal sessions, search documents, and more.
@@ -204,6 +213,10 @@ the results. Don't just dump raw tool output on the user."""
 
     if custom:
         prompt += f"\n\nAdditional instructions:\n{custom}"
+
+    # Inject passive memory context (learned preferences + project context)
+    if memory_context:
+        prompt += f"\n\n## What I Know About You\n{memory_context}"
 
     # In legacy mode, append text-based tool descriptions from plugins.
     # In native mode, skip this — tool definitions are sent via the API.

@@ -1,9 +1,0 @@
-name: Web Scraper
-description: Extract data and content from web pages
-version: 1.0.0
-dependencies:
-  - requests
-  - beautifulsoup4
-actions:
-  - scrape_url
-  - get_page_title

@@ -93,15 +93,16 @@ CATEGORY_PATTERNS: dict[str, list[tuple[str, int]]] = {
 # most universally useful actions.  NOTE: terminal_execute is intentionally
 # NOT here — it's too "attractive" to the model and gets called even when
 # it's not appropriate.  It's included only for "code" intent.
+# NOTE: mem0 tools removed from core — passive memory handles automatic
+# recall now. Mem0 tools are still available via the "memory" category
+# when the user explicitly mentions remember/recall/forget.
 CORE_TOOL_NAMES: list[str] = [
     "brave__google_search",
     "brave__web_fetch",
-    "mem0__memory_search",
-    "mem0__memory_store",
 ]
 
 # When no category matches, fall back to these categories.
-DEFAULT_CATEGORIES = ["web", "memory"]
+DEFAULT_CATEGORIES = ["web"]
 
 
 class ToolSelector:

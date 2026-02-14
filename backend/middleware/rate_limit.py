@@ -40,7 +40,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self,
         app: ASGIApp,
         general_limit: int = 60,
-        admin_limit: int = 10,
+        admin_limit: int = 30,
         auth_limit: int = 5,
         window_seconds: int = 60,
     ):

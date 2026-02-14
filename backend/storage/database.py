@@ -346,14 +346,22 @@ class Database:
         model: str = None,
         metadata: dict = None,
     ) -> dict:
-        """Insert or update a work item."""
+        """Insert or update a work item.
+
+        Uses separate named params for every column to avoid asyncpg type
+        ambiguity:
+          - :created_ts / :started_ts / :completed_ts for timestamptz columns
+          - :status / :status_chk for varchar columns
+          - CAST(:metadata AS jsonb) instead of ::jsonb
+        """
         now = datetime.now(timezone.utc)
         meta_json = json.dumps(metadata) if metadata else None
+        started_ts = now if status == "running" else None
         async with self._session_factory() as session:
             await session.execute(text("""
                 INSERT INTO work_items (id, kind, title, status, parent_id, conv_id, model, metadata, created_at, started_at)
-                VALUES (:id, :kind, :title, :status, :parent_id, :conv_id, :model, :metadata::jsonb, :now,
-                        CASE WHEN :status = 'running' THEN :now ELSE NULL END)
+                VALUES (:id, :kind, :title, :status, :parent_id, :conv_id, :model,
+                        CAST(:metadata AS jsonb), :created_ts, :started_ts)
                 ON CONFLICT (id) DO UPDATE SET
                     title = EXCLUDED.title,
                     status = EXCLUDED.status,
@@ -361,13 +369,14 @@ class Database:
                     model = COALESCE(EXCLUDED.model, work_items.model),
                     metadata = COALESCE(EXCLUDED.metadata, work_items.metadata),
                     started_at = CASE WHEN EXCLUDED.status = 'running' AND work_items.started_at IS NULL
-                                      THEN :now ELSE work_items.started_at END,
+                                      THEN :upsert_now ELSE work_items.started_at END,
                     completed_at = CASE WHEN EXCLUDED.status IN ('completed', 'failed', 'cancelled')
-                                        THEN :now ELSE work_items.completed_at END
+                                        THEN :upsert_now ELSE work_items.completed_at END
             """), {
                 "id": item_id, "kind": kind, "title": title, "status": status,
-                "parent_id": parent_id, "conv_id": conv_id, "model": model,
-                "metadata": meta_json, "now": now,
+                "parent_id": parent_id, "conv_id": conv_id,
+                "model": model, "metadata": meta_json,
+                "created_ts": now, "started_ts": started_ts, "upsert_now": now,
             })
             await session.commit()
         return {"id": item_id, "kind": kind, "status": status}
@@ -375,28 +384,35 @@ class Database:
     async def update_work_item_status(
         self, item_id: str, status: str, metadata_patch: dict = None
     ) -> None:
-        """Update just the status (and optionally metadata) of a work item."""
+        """Update just the status (and optionally metadata) of a work item.
+
+        Pre-computes started_at/completed_at in Python to avoid asyncpg type
+        ambiguity from mixing timestamptz and varchar in CASE expressions.
+        """
         now = datetime.now(timezone.utc)
+        started_ts = now if status == "running" else None
+        completed_ts = now if status in ("completed", "failed", "cancelled") else None
+
         if metadata_patch:
             meta_json = json.dumps(metadata_patch)
             sql = """
                 UPDATE work_items SET
                     status = :status,
-                    started_at = CASE WHEN :status = 'running' AND started_at IS NULL THEN :now ELSE started_at END,
-                    completed_at = CASE WHEN :status IN ('completed', 'failed', 'cancelled') THEN :now ELSE completed_at END,
-                    metadata = COALESCE(metadata, '{}'::jsonb) || :patch::jsonb
+                    started_at = COALESCE(started_at, :started_ts),
+                    completed_at = COALESCE(:completed_ts, completed_at),
+                    metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:patch AS jsonb)
                 WHERE id = :id
             """
-            params = {"id": item_id, "status": status, "now": now, "patch": meta_json}
+            params = {"id": item_id, "status": status, "started_ts": started_ts, "completed_ts": completed_ts, "patch": meta_json}
         else:
             sql = """
                 UPDATE work_items SET
                     status = :status,
-                    started_at = CASE WHEN :status = 'running' AND started_at IS NULL THEN :now ELSE started_at END,
-                    completed_at = CASE WHEN :status IN ('completed', 'failed', 'cancelled') THEN :now ELSE completed_at END
+                    started_at = COALESCE(started_at, :started_ts),
+                    completed_at = COALESCE(:completed_ts, completed_at)
                 WHERE id = :id
             """
-            params = {"id": item_id, "status": status, "now": now}
+            params = {"id": item_id, "status": status, "started_ts": started_ts, "completed_ts": completed_ts}
         async with self._session_factory() as session:
             await session.execute(text(sql), params)
             await session.commit()
