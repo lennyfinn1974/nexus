@@ -66,10 +66,14 @@ export default function SetupPage() {
       } else {
         toast.error(res.error ?? 'Cannot reach Ollama')
       }
-    } catch {
-      toast.error('Cannot reach Ollama — is it running?')
+    } catch (err) {
+      if (err instanceof Error && 'status' in err && (err as { status: number }).status === 401) {
+        toast.error('Auth error — try refreshing the page')
+      } else {
+        toast.error('Cannot reach Ollama — is it running on ' + ollamaUrl + '?')
+      }
     }
-  }, [ollamaModel])
+  }, [ollamaModel, ollamaUrl])
 
   const testClaude = useCallback(() => {
     // Save key first, then test

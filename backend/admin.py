@@ -36,7 +36,14 @@ async def require_admin(
 
     When auth is enabled: requires JWT with role=admin.
     When auth is disabled: falls back to ADMIN_API_KEY bearer token.
+    During first-time setup: allows open access so the setup wizard can
+    reach admin endpoints like /admin/models/ollama-list.
     """
+    # First-time setup bypass: if setup wizard hasn't completed, allow all
+    # admin access so the onboarding UI can test Ollama, save settings, etc.
+    if _cfg and not _cfg.setup_complete:
+        return
+
     # Check JWT from middleware first (set by auth_middleware in main.py)
     user = getattr(request.state, "user", None)
     if user and user.get("role") == "admin":
