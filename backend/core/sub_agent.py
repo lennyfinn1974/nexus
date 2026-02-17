@@ -528,11 +528,19 @@ class SubAgentOrchestrator:
             raise
 
     def _get_task_stream(self):
-        """Get the distributed task stream, if clustering is active."""
+        """Get the distributed task stream, if clustering is active AND
+        a handler for 'sub_agent' tasks is registered.
+
+        Without a registered handler, published tasks go nowhere and
+        await_results blocks until timeout — so fall back to local execution.
+        """
         try:
             cluster_mgr = getattr(self.state, "cluster_manager", None)
             if cluster_mgr and cluster_mgr.is_active and cluster_mgr.task_stream:
-                return cluster_mgr.task_stream
+                ts = cluster_mgr.task_stream
+                # Only use distributed path if a consumer is registered
+                if hasattr(ts, "_handlers") and "sub_agent" in ts._handlers:
+                    return ts
         except Exception:
             pass
         return None
@@ -560,15 +568,15 @@ class SubAgentOrchestrator:
                     "role": spec.role.value,
                     "prompt": prompt,
                     "model": spec.model or "",
-                    "max_tokens": spec.max_tokens,
-                    "dependencies": spec.dependencies,
+                    "max_tokens": 4096,  # Default for distributed execution
+                    "dependencies": spec.depends_on,
                 },
                 priority="normal",
                 conv_id=self.conv_id,
                 role=spec.role.value,
                 model_hint=spec.model or "",
                 parent_id=orchestration.id,
-                timeout_ms=(spec.max_tokens // 4) * 1000 or 60_000,
+                timeout_ms=spec.timeout_seconds * 1000,
             )
             task_ids.append((spec, task_id))
 

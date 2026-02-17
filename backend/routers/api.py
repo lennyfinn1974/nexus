@@ -177,12 +177,16 @@ async def api_health(request: Request):
 
         memory = psutil.virtual_memory()
         pct = memory.percent
+        avail_mb = memory.available / (1024 * 1024)
+        # On memory-constrained systems (24GB + 17GB LLM), transient spikes
+        # during Ollama inference are expected. Only flag unhealthy if
+        # available memory drops below 512MB (truly critical).
         health_status["checks"]["memory"] = {
             "status": "healthy" if pct < 90 else "warning" if pct < 95 else "critical",
             "usage_percent": pct,
-            "available_mb": memory.available / (1024 * 1024),
+            "available_mb": avail_mb,
         }
-        if pct > 95:
+        if avail_mb < 512:
             health_status["healthy"] = False
     except Exception as e:
         health_status["checks"]["memory"] = {"status": "unhealthy", "details": f"Memory check error: {e}"}

@@ -40,7 +40,7 @@ class WorkingMemory:
 
         # Store session state
         await wm.set_session("conv-123", {
-            "model": "kimi-k2.5",
+            "model": "qwen3-coder:30b",
             "messages_count": 15,
             "last_tool": "web_fetch",
             "active_plan": {"id": "plan-abc", "step": 3},

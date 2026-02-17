@@ -38,7 +38,7 @@ def _build_help_text() -> str:
 | Command | Action |
 |---------|--------|
 | `/code` | Switch to **Claude Code** (agentic + MCP tools) |
-| `/local` | Switch to **Ollama** (kimi-k2.5, local) |
+| `/local` | Switch to **Ollama** (qwen3-coder, local) |
 | `/cloud` | Switch to **Claude API** (cloud) |
 | `/auto` | Reset to **auto** routing (local-first) |
 | `/model <name>` | Full model command — accepts: `code` `local` `cloud` `claude` `ollama` `agentic` `mcp` `agent` `kimi` `api` `auto` |
@@ -71,6 +71,7 @@ def _build_help_text() -> str:
 | `/plugins` | List loaded plugins and their tools |
 | `/tasks` | Show task queue |
 | `/exec python\\|bash <code>` | Execute code |
+| `/clear-board` | Clear all KanBan work items |
 | `/help` | This help message |
 
 ## Sub-Agents
@@ -219,6 +220,16 @@ async def websocket_chat(ws: WebSocket):
                 else:
                     models_help = "Available: `local` `claude` `code` `auto` (or aliases: `cloud` `api` `kimi` `agentic` `mcp` `agent`)"
                     await websocket_manager.send_to_client(ws_id, {"type": "system", "content": f"Unknown model '{choice}'. {models_help}"})
+                continue
+
+            # ── /clear-board — Purge KanBan work items ──
+            if text_lower in ("/clear-board", "/clearboard", "/clear-kanban"):
+                from core.work_registry import work_registry
+                count = await work_registry.clear_all()
+                await websocket_manager.send_to_client(
+                    ws_id,
+                    {"type": "system", "content": f"🧹 KanBan board cleared — {count} work items removed."},
+                )
                 continue
 
             # ── /cc — Claude Code interactive sessions ──
@@ -680,40 +691,70 @@ async def _handle_user_message(
 
         # Only run memory hooks if we have a meaningful response
         if final_response and len(final_response) > 20:
-            # Passive memory extraction
+            # Run all memory hooks in a single sequenced background task.
+            # This prevents 4 parallel embedding calls from competing with
+            # the user's next inference request on the Ollama slot.
             passive_mem = getattr(s, "passive_memory", None)
-            if passive_mem:
-                asyncio.create_task(
-                    _extract_passive_memory(passive_mem, conv_id, text, final_response)
-                )
-
-            # RAG ingest — store conversation turn for future retrieval
             rag_pipeline = getattr(s, "rag_pipeline", None)
-            auto_ingest = s.cfg.get_bool("RAG_AUTO_INGEST", True) if s.cfg else True
-            if rag_pipeline and rag_pipeline.is_active and auto_ingest:
-                asyncio.create_task(
-                    _rag_ingest(rag_pipeline, conv_id, text, final_response)
-                )
-
-            # Knowledge Graph extraction
             knowledge_graph = getattr(s, "knowledge_graph", None)
-            if knowledge_graph:
-                asyncio.create_task(
-                    _kg_extract(knowledge_graph, conv_id, text, final_response)
-                )
+            auto_ingest = s.cfg.get_bool("RAG_AUTO_INGEST", True) if s.cfg else True
+            attempt = getattr(runner, "_attempt", None)
+            web_results = getattr(attempt, "web_results", []) if attempt else []
 
-            # Web content memory — ingest key facts from web searches
-            if rag_pipeline and rag_pipeline.is_active:
-                attempt = getattr(runner, "_attempt", None)
-                web_results = getattr(attempt, "web_results", []) if attempt else []
-                if web_results:
-                    asyncio.create_task(
-                        _web_memory_ingest(rag_pipeline, conv_id, text, web_results)
-                    )
+            asyncio.create_task(
+                _run_memory_hooks_sequenced(
+                    passive_mem=passive_mem,
+                    rag_pipeline=rag_pipeline if auto_ingest else None,
+                    knowledge_graph=knowledge_graph,
+                    conv_id=conv_id,
+                    text=text,
+                    final_response=final_response,
+                    web_results=web_results,
+                )
+            )
         else:
             logger.info(f"Memory hooks skipped: response too short ({len(final_response)} chars)")
 
     return runner
+
+
+async def _run_memory_hooks_sequenced(
+    passive_mem,
+    rag_pipeline,
+    knowledge_graph,
+    conv_id: str,
+    text: str,
+    final_response: str,
+    web_results: list,
+):
+    """Run all post-response memory hooks sequentially with delays.
+
+    Previously these ran as 4 parallel tasks, all hitting Ollama's embedding
+    endpoint at once and competing with the user's next inference request.
+    Now they run one at a time with a 2-second initial delay so the next
+    user prompt gets priority on the Ollama slot.
+    """
+    # Wait 2s before starting — let user's next prompt claim the Ollama slot first
+    await asyncio.sleep(2)
+
+    # 1. Passive memory (regex only, no LLM/embedding — fast)
+    if passive_mem:
+        await _extract_passive_memory(passive_mem, conv_id, text, final_response)
+
+    # 2. RAG ingest (calls embedding service — one Ollama round-trip)
+    if rag_pipeline and rag_pipeline.is_active:
+        await _rag_ingest(rag_pipeline, conv_id, text, final_response)
+        # Small gap so embedding model can unload before next call
+        await asyncio.sleep(0.5)
+
+    # 3. Web content memory (calls embedding service if web results exist)
+    if rag_pipeline and rag_pipeline.is_active and web_results:
+        await _web_memory_ingest(rag_pipeline, conv_id, text, web_results)
+        await asyncio.sleep(0.5)
+
+    # 4. Knowledge graph (regex extraction, may call embeddings)
+    if knowledge_graph:
+        await _kg_extract(knowledge_graph, conv_id, text, final_response)
 
 
 async def _extract_passive_memory(extractor, conv_id: str, user_msg: str, assistant_msg: str):

@@ -56,7 +56,7 @@ class ModelRouter:
         claude: ClaudeClient | None,
         claude_code: Any | None = None,
         complexity_threshold: int = 70,
-        timeout_seconds: int = 30,
+        timeout_seconds: int = 120,
     ):
         self.ollama = ollama
         self.claude = claude

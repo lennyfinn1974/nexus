@@ -7,7 +7,9 @@ and looping until the model produces a final answer or hits the round limit.
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -294,6 +296,48 @@ class AgentAttempt:
                         "error": str(exc),
                         "tool_use_id": tool_id,
                     })
+
+        # Fallback: parse text-based tool calls from response body.
+        # qwen3-coder sometimes outputs <function=tool_name> XML tags instead
+        # of using native function calling (especially with longer prompts).
+        if not tool_results and full_response and tool_executor:
+            fn_pattern = r"<function=([\w_]+)>\s*(.*?)\s*</function>"
+            for match in re.finditer(fn_pattern, full_response, re.DOTALL):
+                func_name = match.group(1)
+                args_str = match.group(2).strip()
+                try:
+                    args = json.loads(args_str) if args_str else {}
+                except (ValueError, json.JSONDecodeError):
+                    args = {}
+
+                logger.info(f"Fallback text-tool-call parsed: {func_name}({args})")
+                try:
+                    parsed = tool_executor.parse_anthropic_tool_call({
+                        "id": f"text_fallback_{len(tool_results)}",
+                        "name": func_name,
+                        "input": args,
+                    })
+                    result = await tool_executor.execute(parsed)
+                    if result.success:
+                        tool_results.append({
+                            "tool": func_name,
+                            "result": result.result,
+                            "tool_use_id": f"text_fallback_{len(tool_results)}",
+                        })
+                        if func_name.split("__")[-1] in self.WEB_TOOLS:
+                            self.web_results.append({
+                                "tool": func_name,
+                                "query": args,
+                                "result": result.result or "",
+                            })
+                    else:
+                        tool_results.append({
+                            "tool": func_name,
+                            "error": result.error,
+                            "tool_use_id": f"text_fallback_{len(tool_results)}",
+                        })
+                except Exception as exc:
+                    logger.error(f"Fallback tool {func_name} failed: {exc}")
 
         # Legacy regex-based tool calls (fallback for text-based tool_call tags)
         if not tool_results and full_response:

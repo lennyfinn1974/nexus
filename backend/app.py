@@ -651,22 +651,40 @@ async def lifespan(app: FastAPI):
         state.cluster_manager.working_memory.set_promotion_callback(_promote_to_pg)
         logger.info("Working memory → PostgreSQL promotion pipeline connected")
 
-    # Embedding Service — local embeddings via Ollama
-    try:
-        from core.embeddings import EmbeddingService
+    # Embedding Service — CPU-first via fastembed (no GPU contention with LLMs)
+    embedding_model = state.cfg.get("EMBEDDING_MODEL", "nomic-embed-text")
+    embedding_dims = int(state.cfg.get("EMBEDDING_DIMS", "768"))
+    embedding_backend = state.cfg.get("EMBEDDING_BACKEND", "cpu")  # "cpu" or "ollama"
 
-        embedding_model = state.cfg.get("EMBEDDING_MODEL", "nomic-embed-text")
-        embedding_dims = int(state.cfg.get("EMBEDDING_DIMS", "768"))
-        state.embedding_service = EmbeddingService(
-            ollama_url=state.cfg.ollama_base_url,
-            model=embedding_model,
-            dims=embedding_dims,
-        )
-        avail = await state.embedding_service.is_available()
-        if avail:
-            logger.info(f"Embedding service ready: {embedding_model} ({embedding_dims}-dim)")
-        else:
-            logger.warning(f"Embedding model '{embedding_model}' not available. Run: ollama pull {embedding_model}")
+    try:
+        if embedding_backend != "ollama":
+            # Preferred: CPU-only fastembed (zero GPU contention, ~8ms/embed)
+            from core.embeddings import FastEmbedService
+            state.embedding_service = FastEmbedService(
+                model=embedding_model,
+                dims=embedding_dims,
+            )
+            avail = await state.embedding_service.is_available()
+            if avail:
+                logger.info(f"Embedding service ready: {embedding_model} ({embedding_dims}-dim, CPU/fastembed)")
+            else:
+                logger.warning("FastEmbed failed — falling back to Ollama embeddings")
+                state.embedding_service = None
+
+        if state.embedding_service is None:
+            # Fallback: Ollama (shares GPU with LLM — may cause model swap lag)
+            from core.embeddings import EmbeddingService
+            state.embedding_service = EmbeddingService(
+                ollama_url=state.cfg.ollama_base_url,
+                model=embedding_model,
+                dims=embedding_dims,
+            )
+            avail = await state.embedding_service.is_available()
+            if avail:
+                logger.info(f"Embedding service ready: {embedding_model} ({embedding_dims}-dim, Ollama)")
+            else:
+                logger.warning(f"Embedding model '{embedding_model}' not available via Ollama")
+
     except Exception as e:
         state.embedding_service = None
         logger.warning(f"Embedding service failed to initialize: {e}")

@@ -449,6 +449,13 @@ class Database:
                 items.append(d)
             return items
 
+    async def clear_all_work_items(self) -> int:
+        """Delete ALL work items from the database."""
+        async with self._session_factory() as session:
+            result = await session.execute(text("DELETE FROM work_items"))
+            await session.commit()
+            return result.rowcount
+
     async def cleanup_old_work_items(self, days: int = 7) -> int:
         """Delete work items older than N days that are in terminal state."""
         async with self._session_factory() as session:

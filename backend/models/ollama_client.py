@@ -20,7 +20,7 @@ logger = logging.getLogger("nexus.ollama")
 class OllamaClient:
     """Client for Ollama's local API."""
 
-    def __init__(self, base_url: str = "http://localhost:11434", model: str = "kimi-k2.5:cloud"):
+    def __init__(self, base_url: str = "http://localhost:11434", model: str = "qwen3-coder:30b"):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self._client = httpx.AsyncClient(base_url=self.base_url, timeout=120.0)
@@ -40,6 +40,7 @@ class OllamaClient:
             "mixtral",
             "qwen2",
             "qwen2.5",
+            "qwen3",
             "command-r",
             "kimi",
         ]
@@ -188,10 +189,9 @@ class OllamaClient:
         """Stream a chat completion response.
 
         Yields text chunks (str) for content and dicts for tool calls.
-        When tools are provided, uses /v1/chat/completions (non-streaming)
-        for reliable tool call parsing.  Also uses /v1 when messages contain
-        tool-formatted content (role:"tool") even without tools — this
-        happens during forced synthesis rounds.
+        Uses /v1/chat/completions with SSE streaming for both tool-calling
+        and synthesis (tool-result) modes.  Falls back to /api/chat (native
+        Ollama streaming) when no tools are involved for lowest latency.
         """
         use_tools = bool(tools and self.supports_tools)
 
@@ -199,10 +199,9 @@ class OllamaClient:
         has_tool_messages = any(m.get("role") == "tool" for m in messages)
 
         if use_tools or has_tool_messages:
-            # Non-streaming via /v1 for tool mode — much more reliable
+            # SSE streaming via /v1 — streams text chunks AND collects tool calls
             synthesis_mode = has_tool_messages and not use_tools
             try:
-                # In synthesis mode, add a user instruction to force text answer
                 synth_messages = list(messages)
                 if synthesis_mode:
                     synth_messages.append({
@@ -213,26 +212,90 @@ class OllamaClient:
                             "tool results above. Do NOT call any more tools."
                         ),
                     })
-                result = await self._chat_v1(synth_messages, system, tools)
-                # Yield any text content
-                if result.get("content"):
-                    yield result["content"]
-                # Only yield tool calls when NOT in synthesis mode
+
+                msgs = synth_messages
+                if system:
+                    msgs = [{"role": "system", "content": system}] + msgs
+
+                payload: dict[str, Any] = {
+                    "model": self.model,
+                    "messages": msgs,
+                    "stream": True,
+                }
+                if not synthesis_mode and tools:
+                    payload["tools"] = tools
+                    tool_names = [t.get("function", {}).get("name", "?") for t in tools]
+                    logger.info(f"Sending {len(tools)} tools to Ollama /v1: {tool_names}")
+                    logger.debug(f"System prompt length: {len(system or '')} chars, Messages: {len(msgs)}")
+
+                # Accumulate tool calls from streaming deltas
+                tool_call_accum: dict[int, dict] = {}  # index → {id, name, arguments_str}
+
+                async with self._client.stream(
+                    "POST", "/v1/chat/completions", json=payload, timeout=180.0,
+                ) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        line = line.strip()
+                        if not line or line == "data: [DONE]":
+                            continue
+                        if line.startswith("data: "):
+                            line = line[6:]
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+
+                        delta = data.get("choices", [{}])[0].get("delta", {})
+
+                        # Stream text content immediately
+                        content = delta.get("content")
+                        if content:
+                            yield content
+
+                        # Accumulate tool call deltas
+                        for tc_delta in delta.get("tool_calls", []):
+                            idx = tc_delta.get("index", 0)
+                            if idx not in tool_call_accum:
+                                tool_call_accum[idx] = {
+                                    "id": tc_delta.get("id", f"ollama_{idx}"),
+                                    "name": "",
+                                    "arguments": "",
+                                }
+                            func = tc_delta.get("function", {})
+                            if func.get("name"):
+                                tool_call_accum[idx]["name"] = func["name"]
+                            if func.get("arguments"):
+                                tool_call_accum[idx]["arguments"] += func["arguments"]
+
+                        # Check for finish
+                        finish = data.get("choices", [{}])[0].get("finish_reason")
+                        if finish:
+                            logger.debug(f"Stream finish_reason: {finish}")
+                            break
+
+                # Yield accumulated tool calls after streaming completes
+                if tool_call_accum:
+                    logger.info(f"Model returned {len(tool_call_accum)} tool call(s): {[tc['name'] for tc in tool_call_accum.values()]}")
+                else:
+                    logger.info("Model returned NO tool calls (text-only response)")
                 if not synthesis_mode:
-                    for tc in result.get("tool_calls", []):
-                        func = tc.get("function", {})
-                        args = func.get("arguments", {})
-                        if isinstance(args, str):
-                            try:
-                                args = json.loads(args)
-                            except json.JSONDecodeError:
-                                args = {}
+                    for idx in sorted(tool_call_accum.keys()):
+                        tc = tool_call_accum[idx]
+                        args = tc["arguments"]
+                        try:
+                            args = json.loads(args) if args else {}
+                        except json.JSONDecodeError:
+                            args = {}
                         yield {
                             "type": "tool_use",
-                            "id": tc.get("id", f"ollama_{id(tc)}"),
-                            "name": func.get("name", ""),
+                            "id": tc["id"],
+                            "name": tc["name"],
                             "input": args,
                         }
+
             except Exception as e:
                 yield f"\n\n[Error: Ollama tool call failed -- {e}]"
             return

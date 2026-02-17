@@ -55,12 +55,12 @@ SETTINGS_SCHEMA: list[dict] = [
     },
     {
         "key": "OLLAMA_MODEL",
-        "default": "kimi-k2.5:cloud",
+        "default": "qwen3-coder:30b",
         "encrypted": False,
         "category": "Models",
         "label": "Ollama Model",
         "type": "text",
-        "description": "Local model name (e.g. llama3.1, kimi-k2.5:cloud)",
+        "description": "Local model name (e.g. qwen3-coder:30b, kimi-k2.5:cloud, qwen3:32b)",
     },
     # Claude Code (headless CLI)
     {
@@ -873,7 +873,7 @@ class ConfigManager:
 
     @property
     def ollama_model(self):
-        return self.get("OLLAMA_MODEL", "kimi-k2.5:cloud")
+        return self.get("OLLAMA_MODEL", "qwen3-coder:30b")
 
     @property
     def complexity_threshold(self):

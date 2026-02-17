@@ -451,7 +451,11 @@ class MemoryIndex:
         limit: int = 5,
         memory_type: str = None,
     ) -> list[dict[str, Any]]:
-        """Search using Redis 8 VSIM (native HNSW, sub-ms)."""
+        """Search using Redis 8 VSIM (native HNSW, sub-ms).
+
+        Uses pipelined HMGET to fetch all metadata in a single round-trip
+        instead of N individual calls (eliminates N+1 query problem).
+        """
         try:
             blob = _float_vector_to_bytes(query_embedding)
 
@@ -467,14 +471,16 @@ class MemoryIndex:
             if memory_type:
                 cmd.extend(["FILTER", f".memory_type == '{memory_type}'"])
 
+            t0 = time.time()
             raw = await self._redis.execute_command(*cmd)
             self._searched += 1
+            vsim_ms = int((time.time() - t0) * 1000)
 
-            # Parse VSIM results: [element1, score1, element2, score2, ...]
-            results = []
             if not raw:
-                return results
+                return []
 
+            # Phase 1: Parse VSIM results into (mem_id, distance) pairs
+            candidates = []
             i = 0
             while i < len(raw) - 1:
                 mem_id = raw[i]
@@ -491,20 +497,29 @@ class MemoryIndex:
                 # VSIM returns cosine similarity (1.0 = identical)
                 # Convert to cosine distance for compatibility (lower = better)
                 distance = 1.0 - score
+                candidates.append((mem_id, distance))
 
-                # Fetch metadata from the hash
-                hash_key = self._mem_key(mem_id)
-                data = await self._redis.hmget(
-                    hash_key, "id", "text", "memory_type",
-                    "source_agent", "source_conv", "access_count",
-                    "created_at",
-                )
+            if not candidates:
+                return []
 
+            # Phase 2: Pipelined HMGET — fetch all metadata in ONE round-trip
+            t1 = time.time()
+            fields = ("id", "text", "memory_type", "source_agent",
+                      "source_conv", "access_count", "created_at")
+            pipe = self._redis.pipeline()
+            for mem_id, _ in candidates:
+                pipe.hmget(self._mem_key(mem_id), *fields)
+            all_data = await pipe.execute()
+            hmget_ms = int((time.time() - t1) * 1000)
+
+            # Phase 3: Assemble results
+            def _d(v):
+                return v.decode("utf-8") if isinstance(v, bytes) else (v or "")
+
+            results = []
+            for (mem_id, distance), data in zip(candidates, all_data):
                 if not data or not data[0]:
                     continue
-
-                def _d(v):
-                    return v.decode("utf-8") if isinstance(v, bytes) else (v or "")
 
                 result = {
                     "id": _d(data[0]),
@@ -518,14 +533,16 @@ class MemoryIndex:
                 }
 
                 # Post-filter by memory_type if FILTER didn't work
-                # (FILTER expression support varies)
                 if memory_type and result["memory_type"] != memory_type:
                     continue
 
                 results.append(result)
 
-                if len(results) >= limit:
-                    break
+            if vsim_ms + hmget_ms > 50:
+                logger.info(
+                    f"VSIM search: {len(candidates)} candidates, "
+                    f"{len(results)} results [vsim={vsim_ms}ms, hmget={hmget_ms}ms]"
+                )
 
             return results
 

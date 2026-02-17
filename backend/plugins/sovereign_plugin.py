@@ -34,7 +34,7 @@ class SovereignPlugin(NexusPlugin):
         )
         self._active_procedure = None
         self._session_manager = None
-        self._cc_session_id = None  # Active Claude Code session for BLD:APP
+        self._cc_session_ids: list[str] = []  # Active Claude Code sessions for BLD:APP
 
     def set_session_manager(self, manager):
         """Inject the Claude session manager (called from app.py post-setup)."""
@@ -366,7 +366,10 @@ class SovereignPlugin(NexusPlugin):
             "sessions": ["nexus-server", "nexus-dev", "nexus-logs", "nexus-work"],
         }
 
-        # Step 4: Start managed Claude Code session (if session manager available)
+        # Step 4: Start managed Claude Code session(s)
+        # Boris Cherny multi-agent pattern — starts a primary builder session.
+        # Additional agent sessions can be spawned via /cc or claude_multi_agent tool.
+        self._cc_session_ids = []
         if self._session_manager:
             try:
                 session = await self._session_manager.create_session(
@@ -378,9 +381,11 @@ class SovereignPlugin(NexusPlugin):
                     ),
                     directory=project_dir,
                     name="nexus-build",
+                    role="builder",
                 )
-                self._cc_session_id = session.id
-                lines.append(f"✅ Claude Code session: `{session.id}` (nexus-build)")
+                self._cc_session_ids.append(session.id)
+                lines.append(f"✅ Claude Code session: `{session.id}` (nexus-build, role=builder)")
+                lines.append(f"   💡 Spawn more agents: `/cc <prompt>` or use `claude_multi_agent` tool (up to 5)")
             except Exception as e:
                 lines.append(f"⚠️  Claude Code session: {e}")
 
@@ -454,14 +459,21 @@ class SovereignPlugin(NexusPlugin):
         else:
             lines.append("ℹ️  No procedure sessions running")
 
-        # Stop managed Claude Code session
-        if self._cc_session_id and self._session_manager:
-            try:
-                await self._session_manager.stop_session(self._cc_session_id)
-                lines.append(f"✅ Claude Code session `{self._cc_session_id}` stopped")
-                self._cc_session_id = None
-            except Exception:
-                pass
+        # Stop all managed Claude Code sessions
+        if self._cc_session_ids and self._session_manager:
+            for cc_id in self._cc_session_ids:
+                try:
+                    await self._session_manager.stop_session(cc_id)
+                    lines.append(f"✅ Claude Code session `{cc_id}` stopped")
+                except Exception:
+                    pass
+            self._cc_session_ids = []
+
+        # Also stop any remaining Claude sessions not tracked by BLD:APP
+        if self._session_manager:
+            remaining = await self._session_manager.stop_all_running()
+            if remaining > 0:
+                lines.append(f"✅ {remaining} additional Claude session(s) stopped")
 
         # Reset model to auto for all websocket sessions
         try:
@@ -514,6 +526,18 @@ class SovereignPlugin(NexusPlugin):
             lines.append(f"  Started: {proc['started_at']}")
         else:
             lines.append("\n**Active Procedure:** None")
+
+        # Claude Code sessions
+        if self._session_manager:
+            cc_sessions = self._session_manager.list_sessions()
+            if cc_sessions:
+                lines.append(f"\n**Claude Code Sessions ({len(cc_sessions)}):**")
+                for s in cc_sessions:
+                    icon = "🟢" if s["status"] == "running" else "✅" if s["status"] == "completed" else "❌"
+                    role = f" [{s.get('role', '')}]" if s.get("role") else ""
+                    lines.append(f"  {icon} `{s['id']}` {s['name']}{role} — {s['status']} (${s.get('cost_usd', 0):.4f})")
+            else:
+                lines.append("\n**Claude Code Sessions:** None")
 
         # Model status
         try:

@@ -1,19 +1,26 @@
-"""Embedding Service — local-first embedding generation via Ollama.
+"""Embedding Service — local-first embedding generation.
 
-Provides async embedding generation for RAG and Knowledge Graph systems.
-Uses Ollama's /api/embed endpoint with nomic-embed-text (768-dim) by default.
+Two backends:
+    1. **FastEmbedService** (default) — CPU-only via ONNX Runtime.
+       Zero GPU contention with Ollama LLMs. ~8ms per embedding.
+    2. **EmbeddingService** (legacy) — Ollama /api/embed endpoint.
+       Causes GPU model swaps with large LLMs (400ms+ per embed).
+
+Both share the same async interface: embed(), embed_batch(), is_available(),
+get_stats(), close(). The RAG pipeline and app.py use them interchangeably.
 
 Supports:
     - Single text embedding
     - Batch embedding (multiple texts in one call)
     - Caching (LRU with TTL for repeated queries)
-    - Graceful degradation (returns None if Ollama unavailable)
+    - Graceful degradation (returns None if unavailable)
 
 The embedding model is configurable via EMBEDDING_MODEL setting.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import time
@@ -248,3 +255,214 @@ class EmbeddingService:
     async def close(self) -> None:
         """Close the HTTP client."""
         await self._client.aclose()
+
+
+# ── Model name mapping ────────────────────────────────────────────
+# Maps Ollama model names to HuggingFace fastembed model IDs.
+FASTEMBED_MODEL_MAP = {
+    "nomic-embed-text": "nomic-ai/nomic-embed-text-v1.5",
+    "nomic-embed-text:latest": "nomic-ai/nomic-embed-text-v1.5",
+    "all-minilm": "sentence-transformers/all-MiniLM-L6-v2",
+    "all-minilm:latest": "sentence-transformers/all-MiniLM-L6-v2",
+}
+
+
+class FastEmbedService:
+    """CPU-only embedding via fastembed (ONNX Runtime).
+
+    Drop-in replacement for EmbeddingService. Runs nomic-embed-text-v1.5
+    on CPU threads, zero GPU contention with Ollama inference models.
+
+    Typical latency: ~8ms per single embed, ~3ms/text in batch.
+    Model loads from HuggingFace cache in ~150ms after first download.
+
+    Usage:
+        service = FastEmbedService()
+        await service.is_available()   # loads model
+        embedding = await service.embed("Hello world")
+        embeddings = await service.embed_batch(["text1", "text2"])
+    """
+
+    def __init__(
+        self,
+        model: str = DEFAULT_EMBEDDING_MODEL,
+        dims: int = DEFAULT_EMBEDDING_DIMS,
+    ):
+        # Resolve HuggingFace model name from Ollama name
+        self._hf_model = FASTEMBED_MODEL_MAP.get(model, model)
+        self.model = model
+        self.dims = dims
+        self._fe_model = None  # Lazy-loaded TextEmbedding instance
+        self._cache = EmbeddingCache(max_size=2000, ttl=CACHE_TTL_SECONDS)
+        self._available: Optional[bool] = None
+        self._total_calls = 0
+        self._total_errors = 0
+        self._total_ms = 0
+        self._executor = None  # ThreadPoolExecutor, created on first use
+
+    def _ensure_model(self) -> bool:
+        """Load the fastembed model (blocking, call from executor)."""
+        if self._fe_model is not None:
+            return True
+        try:
+            from fastembed import TextEmbedding
+            self._fe_model = TextEmbedding(self._hf_model)
+            # Detect actual dimensions
+            test = list(self._fe_model.embed(["test"]))[0]
+            self.dims = len(test)
+            return True
+        except Exception as e:
+            logger.error(f"FastEmbed model load failed: {e}")
+            return False
+
+    async def is_available(self) -> bool:
+        """Check if the embedding model can be loaded."""
+        try:
+            loop = asyncio.get_event_loop()
+            if self._executor is None:
+                from concurrent.futures import ThreadPoolExecutor
+                self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fastembed")
+            result = await loop.run_in_executor(self._executor, self._ensure_model)
+            self._available = result
+            if result:
+                logger.info(
+                    f"FastEmbed ready: {self._hf_model} ({self.dims}-dim, CPU)"
+                )
+            else:
+                logger.warning(f"FastEmbed model '{self._hf_model}' failed to load")
+            return result
+        except Exception as e:
+            logger.warning(f"FastEmbed availability check failed: {e}")
+            self._available = False
+            return False
+
+    def _embed_sync(self, texts: list[str]) -> list[list[float]]:
+        """Synchronous embedding — called from thread executor."""
+        if self._fe_model is None:
+            self._ensure_model()
+        if self._fe_model is None:
+            return []
+        return [emb.tolist() for emb in self._fe_model.embed(texts)]
+
+    async def embed(self, text: str) -> Optional[list[float]]:
+        """Generate embedding for a single text.
+
+        Returns None if the service is unavailable or an error occurs.
+        Uses cache to avoid redundant calls.
+        """
+        if not text or not text.strip():
+            return None
+
+        # Check cache first
+        cached = self._cache.get(text)
+        if cached is not None:
+            return cached
+
+        try:
+            self._total_calls += 1
+            start = time.time()
+
+            loop = asyncio.get_event_loop()
+            if self._executor is None:
+                from concurrent.futures import ThreadPoolExecutor
+                self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fastembed")
+
+            results = await loop.run_in_executor(
+                self._executor, self._embed_sync, [text.strip()]
+            )
+
+            elapsed_ms = int((time.time() - start) * 1000)
+            self._total_ms += elapsed_ms
+
+            if results and len(results[0]) > 0:
+                embedding = results[0]
+                self._cache.put(text, embedding)
+                if len(embedding) != self.dims:
+                    self.dims = len(embedding)
+                return embedding
+
+        except Exception as e:
+            self._total_errors += 1
+            logger.warning(f"FastEmbed error: {e}")
+
+        return None
+
+    async def embed_batch(self, texts: list[str]) -> list[Optional[list[float]]]:
+        """Generate embeddings for multiple texts.
+
+        Uses fastembed's native batch processing for efficiency.
+        Returns a list of embeddings (None for any that failed).
+        """
+        if not texts:
+            return []
+
+        results: list[Optional[list[float]]] = [None] * len(texts)
+
+        # Check cache and identify texts that need embedding
+        uncached_indices: list[int] = []
+        uncached_texts: list[str] = []
+
+        for i, text in enumerate(texts):
+            if not text or not text.strip():
+                continue
+            cached = self._cache.get(text)
+            if cached is not None:
+                results[i] = cached
+            else:
+                uncached_indices.append(i)
+                uncached_texts.append(text.strip())
+
+        if not uncached_texts:
+            return results
+
+        try:
+            self._total_calls += 1
+            start = time.time()
+
+            loop = asyncio.get_event_loop()
+            if self._executor is None:
+                from concurrent.futures import ThreadPoolExecutor
+                self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fastembed")
+
+            embeddings = await loop.run_in_executor(
+                self._executor, self._embed_sync, uncached_texts
+            )
+
+            elapsed_ms = int((time.time() - start) * 1000)
+            self._total_ms += elapsed_ms
+
+            for j, emb in enumerate(embeddings):
+                if j < len(uncached_indices) and emb:
+                    idx = uncached_indices[j]
+                    results[idx] = emb
+                    self._cache.put(texts[idx], emb)
+                    if len(emb) != self.dims:
+                        self.dims = len(emb)
+
+        except Exception as e:
+            self._total_errors += 1
+            logger.warning(f"FastEmbed batch error: {e}")
+
+        return results
+
+    def get_stats(self) -> dict:
+        """Get service statistics."""
+        avg_ms = round(self._total_ms / max(self._total_calls, 1), 1)
+        return {
+            "model": f"{self.model} (CPU/fastembed)",
+            "hf_model": self._hf_model,
+            "dims": self.dims,
+            "available": self._available,
+            "backend": "fastembed_cpu",
+            "total_calls": self._total_calls,
+            "total_errors": self._total_errors,
+            "avg_ms": avg_ms,
+            "cache": self._cache.get_stats(),
+        }
+
+    async def close(self) -> None:
+        """Clean up resources."""
+        if self._executor:
+            self._executor.shutdown(wait=False)
+            self._executor = None
+        self._fe_model = None

@@ -32,6 +32,12 @@ CATEGORY_PATTERNS: dict[str, list[tuple[str, int]]] = {
         (r"\b(how does|how do|what are|why is|why does)\b", 2),
         (r"\b(can you|could you|would you)\b.*\b(tell|explain|describe|help me understand)\b", 2),
         (r"\b(my|your) (opinion|thoughts|take)\b", 2),
+        # Conversational continuity — referencing previous context
+        (r"\b(shall we|let'?s|can we)\b.*\b(try|test|check|go|continue|revisit)\b", 3),
+        (r"\bfrom (before|earlier|last time|yesterday|the other day)\b", 3),
+        (r"\b(what (we|did we)|we (talked|discussed|covered|went over))\b", 3),
+        (r"\b(go back to|return to|pick up where)\b", 3),
+        (r"\b(those|the|that|these) (questions?|topics?|things?|items?)\b", 2),
     ],
     "web": [
         (r"\b(google|find online|web search|browse the web|look up online)\b", 2),
@@ -49,7 +55,10 @@ CATEGORY_PATTERNS: dict[str, list[tuple[str, int]]] = {
         (r"\b(clipboard|copy|paste)\b", 1),
         (r"\b(volume|brightness|dark mode|light mode|night mode)\b", 2),
         (r"\b(notification|notify|alert me|say text|speak)\b", 1),
-        (r"\b(frontmost|running apps|active window|window list)\b", 1),
+        (r"\b(frontmost|running apps?|active window|window list)\b", 2),
+        (r"\b(what apps?|which apps?|apps?.*(running|open|active)|(running|open|active).*apps?)\b", 3),
+        (r"\b(my (mac|computer|desktop|laptop|machine))\b", 2),
+        (r"\b(list.*(apps?|processes?|windows?))\b", 2),
         (r"\b(keyboard|type text|shortcut|press key|key combo)\b", 1),
         (r"\b(calendar|events?|schedule|appointment|meeting)\b", 2),
         (r"\b(reminder|reminders|remind me|to.?do)\b", 2),
@@ -77,6 +86,13 @@ CATEGORY_PATTERNS: dict[str, list[tuple[str, int]]] = {
         (r"\b(store this|memorize|save this|keep in mind)\b", 2),
         (r"\b(forget|stored|memories|my preferences)\b", 1),
         (r"\b(do you know about|tell me what you know)\b", 2),
+        (r"\b(where do i|what('?s| is) my|who('?s| is) my)\b", 2),
+        (r"\b(my fav(ou?rite)?|my preferred)\b", 2),
+        # Temporal recall that implies stored personal knowledge
+        (r"\b(do you remember|you remember)\b", 3),
+        (r"\b(i (told|mentioned|said|shared) (you|before|earlier|last))\b", 3),
+        (r"\b(we (discussed|talked about|covered|went over))\b", 2),
+        (r"\b(my (dog|cat|pet|name|address|job|work|coffee|car|phone))\b", 2),
     ],
     "knowledge": [
         (r"\b(document|knowledge base|indexed docs|search docs)\b", 2),
@@ -163,10 +179,16 @@ class ToolSelector:
         Strategy
         --------
         1. If "chat" is primary intent, return NO tools (streaming mode, fastest).
-        2. Always include CORE_TOOL_NAMES (2 tools).
-        3. Primary category → all its tools (up to 10).
-        4. Secondary categories → top 3 tools each.
-        5. Cap at *max_tools*.
+           RAG context already provides relevant memory — no tools needed.
+        2. If "memory" is primary (without web co-intent), return NO tools.
+           Memory-recall queries are answered via RAG context injection;
+           adding web search tools causes the model to second-guess correct
+           answers by searching the web and getting confused when it finds
+           nothing (e.g. small local businesses not indexed).
+        3. Always include CORE_TOOL_NAMES (2 web tools) for other intents.
+        4. Primary category → all its tools (up to 10).
+        5. Secondary categories → top 3 tools each.
+        6. Cap at *max_tools*.
         """
         # 1. Classify intent first
         categories = self.classify_intent(message)
@@ -177,12 +199,22 @@ class ToolSelector:
             logger.info("Selected 0 tools: chat intent (no tools needed)")
             return []
 
+        # Memory-primary intent without explicit web need: no tools.
+        # RAG already injected relevant memories into the context —
+        # giving the model web search tools causes it to "verify"
+        # personal facts on the web, which fails and confuses it.
+        if categories and categories[0] == "memory" and "web" not in categories:
+            logger.info("Selected 0 tools: memory intent (RAG handles recall)")
+            return []
+
         selected: dict[str, ToolDefinition] = {}
 
-        # 2. Core essentials
-        for tool_name in CORE_TOOL_NAMES:
-            if tool_name in self._by_name:
-                selected[tool_name] = self._by_name[tool_name]
+        # 2. Core essentials (web search + fetch) — skip when memory is primary
+        #    even with web co-intent, let category tools dominate
+        if not (categories and categories[0] == "memory"):
+            for tool_name in CORE_TOOL_NAMES:
+                if tool_name in self._by_name:
+                    selected[tool_name] = self._by_name[tool_name]
 
         # 3. Fill from matched categories
         for i, category in enumerate(categories):

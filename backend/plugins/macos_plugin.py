@@ -71,8 +71,15 @@ class MacOSPlugin(NexusPlugin):
             category="system",
         )
         self.add_tool(
+            "list_running_apps",
+            "List all currently running applications on the Mac. Use this when the user asks 'what apps are running', 'what's open', or 'show my running apps'.",
+            {},
+            self._list_running_apps,
+            category="system",
+        )
+        self.add_tool(
             "macos_window_list",
-            "List all visible windows from all applications",
+            "List all visible windows from all running applications (shows app name + window title for each open window)",
             {},
             self._macos_window_list,
             category="system",
@@ -235,6 +242,32 @@ class MacOSPlugin(NexusPlugin):
             return f"✅ Copied {len(text)} characters to clipboard"
         except Exception as e:
             return f"Error: {e}"
+
+    async def _list_running_apps(self, params):
+        """List all running applications using System Events."""
+        script = '''
+        tell application "System Events"
+            set appNames to {}
+            repeat with proc in application processes
+                if background only of proc is false then
+                    set end of appNames to name of proc
+                end if
+            end repeat
+            return appNames
+        end tell
+        '''
+        result = await self._run_osascript(script)
+        if not result or result == "":
+            return "No running applications found"
+
+        # Parse the AppleScript list format
+        apps = result.replace("{", "").replace("}", "").split(", ")
+        lines = [f"🖥️ **Running Applications ({len(apps)}):**\n"]
+        for i, app in enumerate(apps, 1):
+            app_name = app.strip().strip('"')
+            if app_name:
+                lines.append(f"{i}. {app_name}")
+        return "\n".join(lines) if len(lines) > 1 else "No running applications found"
 
     async def _macos_window_list(self, params):
         # Use osascript to get window list from System Events

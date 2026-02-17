@@ -77,13 +77,22 @@ def build_system_prompt(
     current_datetime = _get_current_datetime(cfg)
 
     model_labels = {
-        "ollama": "Ollama (kimi-k2.5, running locally)",
+        "ollama": "Ollama (qwen3-coder, running locally)",
         "claude": "Claude API (Anthropic, cloud)",
         "claude_code": "Claude Code (agentic mode with MCP tools)",
     }
     current_model = model_labels.get(model, model)
 
-    prompt = f"""You are **{name}**, an autonomous AI agent running on the Nexus platform. You are helpful, capable, and direct.
+    # Ollama gets a lean prompt to preserve native tool calling.
+    # qwen3-coder loses native function calling with prompts > ~2000 chars
+    # and falls back to text-based XML tool calls. Keep it minimal.
+    if model == "ollama":
+        prompt = f"""You are {name}, an AI assistant with real tool capabilities.
+{current_datetime}. {tone_instruction}
+Call tools immediately when they can answer the user's question. Be direct and concise.
+After tool results arrive, synthesise them into a clear answer."""
+    else:
+        prompt = f"""You are **{name}**, an autonomous AI agent running on the Nexus platform. You are helpful, capable, and direct.
 Your name is {name} — always use this name when introducing yourself. Nexus is your platform, not your name.
 You are the same agent across all channels (chat UI, Telegram, etc.) — same brain, same memory, same conversation history.
 
@@ -143,21 +152,12 @@ synthesised into a single response. Strategies include:
 
     if tool_calling_mode == "native":
         if model == "ollama":
-            # Ollama gets a focused behavioral prompt. Tool definitions come
-            # through the API — don't duplicate them here with wrong names.
-            prompt += """
-
-## Tool Calling
-
-You have tools available via function calling. The tool definitions describe exactly what each does.
-
-**Rules:**
-1. Pick the 1–2 most relevant tools for the user's question. Do NOT call unrelated tools.
-2. Call tools immediately — do not just describe what you would do.
-3. After tool results come back, synthesise them into a clear, useful answer.
-4. Try to answer within 1–2 tool rounds. Do not scatter across 5 rounds.
-5. If a tool returns an error, explain the issue to the user. Do not silently retry with different tools.
-6. If the user's question can be answered from your knowledge without tools, just answer directly."""
+            # Ollama/qwen3-coder: keep total prompt UNDER 2000 chars.
+            # Longer prompts cause the model to fall back to text-based
+            # tool calls (<function=...>) instead of native function calling.
+            # The lean base prompt above is ~200 chars, so tool section
+            # must be minimal. Tool definitions come through the API.
+            pass  # No additional tool section — lean prompt is sufficient
         elif model == "claude_code":
             # Claude Code runs as an agentic subprocess with MCP tools.
             # It handles its own tool loop — just tell it what's available.
@@ -216,17 +216,26 @@ the results. Don't just dump raw tool output on the user."""
     if custom:
         prompt += f"\n\nAdditional instructions:\n{custom}"
 
+    # For Ollama, cap total context injection to keep prompt under ~1500 chars.
+    # qwen3-coder loses native tool calling with prompts > ~2000 chars.
+    max_context_chars = 500 if model == "ollama" else 10000
+
     # Inject passive memory context (learned preferences + project context)
     if memory_context:
-        prompt += f"\n\n## What I Know About You\n{memory_context}"
+        mem_text = memory_context[:max_context_chars]
+        prompt += f"\n\nAbout the user:\n{mem_text}"
 
     # Inject RAG context (retrieved relevant memories)
     if rag_context:
-        prompt += f"\n\n## Retrieved Context\nThe following information was retrieved from memory and may be relevant:\n\n{rag_context}"
+        remaining = max(0, max_context_chars - len(memory_context or ""))
+        if remaining > 100:
+            rag_text = rag_context[:remaining]
+            prompt += f"\n\nRelevant context:\n{rag_text}"
 
     # Inject Knowledge Graph context (related entities)
     if kg_context:
-        prompt += f"\n\n{kg_context}"
+        if model != "ollama":  # Skip KG for Ollama to save space
+            prompt += f"\n\n{kg_context}"
 
     # In legacy mode, append text-based tool descriptions from plugins.
     # In native mode, skip this — tool definitions are sent via the API.

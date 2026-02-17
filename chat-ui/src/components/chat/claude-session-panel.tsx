@@ -85,6 +85,19 @@ function SessionCard({
           {session.name || session.id}
         </span>
 
+        {session.role && (
+          <span
+            className="rounded-full px-1.5 py-0.5 text-[9px] font-medium"
+            style={{
+              background: 'var(--accent)',
+              color: 'white',
+              opacity: 0.85,
+            }}
+          >
+            {session.role}
+          </span>
+        )}
+
         <span
           className="rounded-full px-1.5 py-0.5 text-[9px]"
           style={{

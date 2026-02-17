@@ -37,7 +37,7 @@ from typing import Any, Optional
 logger = logging.getLogger("nexus.claude_sessions")
 
 _DEFAULT_CLI_PATH = "/opt/homebrew/bin/claude"
-_MAX_CONCURRENT = 3
+_MAX_CONCURRENT = 5
 _KILL_TIMEOUT = 10  # seconds before SIGKILL
 _WS_THROTTLE_MS = 100  # min ms between WebSocket emissions
 
@@ -51,6 +51,7 @@ class ClaudeSession:
     directory: str
     status: str  # "running", "completed", "failed"
     model: str
+    role: str = ""  # Agent role for multi-agent pattern (e.g. "builder", "reviewer")
     process: Optional[Any] = None  # asyncio.subprocess.Process
     reader_task: Optional[Any] = None  # asyncio.Task
     output_buffer: deque = field(default_factory=lambda: deque(maxlen=500))
@@ -70,6 +71,7 @@ class ClaudeSession:
             "directory": self.directory,
             "status": self.status,
             "model": self.model,
+            "role": self.role,
             "tools_used": self.tools_used,
             "cost_usd": self.cost_usd,
             "duration_ms": self.duration_ms,
@@ -105,7 +107,7 @@ class ClaudeSessionManager:
         self._semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
         self._initialized = True
         logger.info(
-            "Claude session manager initialized (cli=%s, mcp=%s, max=%d)",
+            "Claude session manager initialized (cli=%s, mcp=%s, max_concurrent=%d)",
             cli_path, mcp_config_path, _MAX_CONCURRENT,
         )
 
@@ -117,6 +119,7 @@ class ClaudeSessionManager:
         ws_id: Optional[str] = None,
         conv_id: Optional[str] = None,
         model: Optional[str] = None,
+        role: str = "",
     ) -> ClaudeSession:
         """Create and start a new Claude Code session.
 
@@ -140,6 +143,7 @@ class ClaudeSessionManager:
             directory=directory,
             status="running",
             model=effective_model,
+            role=role,
             ws_id=ws_id,
             conv_id=conv_id,
         )
@@ -168,8 +172,9 @@ class ClaudeSessionManager:
             session.process = process
 
             # Send initial prompt via stdin (stream-json input format)
+            # Claude Code CLI expects: {"type": "user", "message": {"role": "user", "content": [...]}}
             initial_msg = {
-                "type": "user_message",
+                "type": "user",
                 "message": {
                     "role": "user",
                     "content": [{"type": "text", "text": prompt}],
@@ -178,10 +183,15 @@ class ClaudeSessionManager:
             process.stdin.write((json.dumps(initial_msg) + "\n").encode())
             await process.stdin.drain()
 
-            # Start output reader task
+            # Start output reader task (stdout) + stderr logger
             session.reader_task = asyncio.create_task(
                 self._output_reader(session),
                 name=f"cc-reader-{session_id}",
+            )
+            # stderr reader — log errors and capture for debugging
+            asyncio.create_task(
+                self._stderr_reader(session),
+                name=f"cc-stderr-{session_id}",
             )
 
             self._sessions[session_id] = session
@@ -227,7 +237,7 @@ class ClaudeSessionManager:
             return False
 
         msg = {
-            "type": "user_message",
+            "type": "user",
             "message": {
                 "role": "user",
                 "content": [{"type": "text", "text": text}],
@@ -304,6 +314,61 @@ class ClaudeSessionManager:
         """Get a session by ID."""
         return self._sessions.get(session_id)
 
+    async def create_multi_agent(
+        self,
+        agents: list[dict],
+        directory: str = ".",
+        ws_id: Optional[str] = None,
+        conv_id: Optional[str] = None,
+    ) -> list[ClaudeSession]:
+        """Spawn multiple agent sessions for Boris Cherny multi-agent pattern.
+
+        Each agent dict should have: prompt, name, role (optional: model).
+        Up to _MAX_CONCURRENT agents can run simultaneously.
+
+        Example:
+            agents = [
+                {"prompt": "Build the API endpoints", "name": "builder", "role": "builder"},
+                {"prompt": "Review the code for issues", "name": "reviewer", "role": "reviewer"},
+                {"prompt": "Write comprehensive tests", "name": "tester", "role": "tester"},
+            ]
+        """
+        if len(agents) > _MAX_CONCURRENT:
+            raise ValueError(
+                f"Cannot spawn {len(agents)} agents — max is {_MAX_CONCURRENT}"
+            )
+
+        sessions = []
+        for agent_spec in agents:
+            session = await self.create_session(
+                prompt=agent_spec["prompt"],
+                directory=directory,
+                name=agent_spec.get("name", ""),
+                ws_id=ws_id,
+                conv_id=conv_id,
+                model=agent_spec.get("model"),
+                role=agent_spec.get("role", ""),
+            )
+            sessions.append(session)
+
+        logger.info(
+            "Multi-agent spawn: %d sessions in %s [%s]",
+            len(sessions), directory,
+            ", ".join(s.name for s in sessions),
+        )
+        return sessions
+
+    def get_running_sessions(self) -> list[ClaudeSession]:
+        """Get only currently running sessions."""
+        return [s for s in self._sessions.values() if s.status == "running"]
+
+    async def stop_all_running(self) -> int:
+        """Stop all running sessions. Returns count of sessions stopped."""
+        running = self.get_running_sessions()
+        for session in running:
+            await self.stop_session(session.id)
+        return len(running)
+
     async def shutdown(self) -> None:
         """Stop all sessions. Called during app teardown."""
         session_ids = list(self._sessions.keys())
@@ -324,7 +389,6 @@ class ClaudeSessionManager:
             "--input-format", "stream-json",
             "--output-format", "stream-json",
             "--verbose",
-            "--session-id", session_id,
             "--model", model,
             "--dangerously-skip-permissions",
         ]
@@ -335,8 +399,15 @@ class ClaudeSessionManager:
         return cmd
 
     async def _output_reader(self, session: ClaudeSession) -> None:
-        """Background task that reads subprocess stdout and routes events."""
-        last_text = ""
+        """Background task that reads subprocess stdout and routes events.
+
+        Claude Code CLI emits newline-delimited JSON with these types:
+        - system: init message (tools, model, session_id, etc.)
+        - assistant: streaming content (text blocks, tool_use blocks)
+        - result: final result with cost/duration/usage
+        """
+        last_text_by_turn: dict[str, str] = {}  # Track text per message ID for deltas
+        current_turn = 0
 
         try:
             async for line in session.process.stdout:
@@ -349,13 +420,31 @@ class ClaudeSessionManager:
                 except json.JSONDecodeError:
                     # Non-JSON output (debug messages, etc.)
                     session.output_buffer.append(line_str)
+                    logger.debug("Non-JSON output from session %s: %s", session.id, line_str[:100])
                     continue
 
                 msg_type = data.get("type", "")
 
-                if msg_type == "assistant":
+                if msg_type == "system":
+                    # Init message — log it, extract useful info
+                    subtype = data.get("subtype", "")
+                    cli_model = data.get("model", "")
+                    cli_session = data.get("session_id", "")
+                    tools = data.get("tools", [])
+                    logger.info(
+                        "Session %s system init: subtype=%s model=%s cli_session=%s tools=%d",
+                        session.id, subtype, cli_model, cli_session, len(tools),
+                    )
+                    # Emit system init so frontend knows session is alive
+                    await self._emit(session, "cc_session_output", {
+                        "session_id": session.id,
+                        "content": f"[Claude Code initialized — model: {cli_model}, tools: {len(tools)}]\n",
+                    })
+
+                elif msg_type == "assistant":
                     # Extract text from content blocks
                     message = data.get("message", {})
+                    msg_id = message.get("id", f"turn_{current_turn}")
                     content_blocks = message.get("content", [])
 
                     for block in content_blocks:
@@ -364,8 +453,9 @@ class ClaudeSessionManager:
 
                         if block.get("type") == "text":
                             text = block.get("text", "")
+                            last_text = last_text_by_turn.get(msg_id, "")
                             if text and text != last_text:
-                                # Yield only the delta
+                                # Yield only the delta (text grows incrementally)
                                 if text.startswith(last_text):
                                     delta = text[len(last_text):]
                                 else:
@@ -377,45 +467,66 @@ class ClaudeSessionManager:
                                         session, "cc_session_output",
                                         {"session_id": session.id, "content": delta},
                                     )
-                                last_text = text
+                                last_text_by_turn[msg_id] = text
 
                         elif block.get("type") == "tool_use":
                             tool_name = block.get("name", "unknown")
                             if tool_name not in session.tools_used:
                                 session.tools_used.append(tool_name)
+                            tool_input = block.get("input", {})
+                            # Log tool usage for visibility
+                            tool_summary = f"[Tool: {tool_name}]"
+                            session.output_buffer.append(tool_summary)
+                            session.full_output += f"\n{tool_summary}\n"
                             await self._emit(session, "cc_session_tool_use", {
                                 "session_id": session.id,
                                 "tool_name": tool_name,
                             })
 
+                        elif block.get("type") == "tool_result":
+                            # Tool result — sometimes emitted in verbose mode
+                            pass
+
+                    # Check stop_reason to detect turn boundaries
+                    stop_reason = message.get("stop_reason")
+                    if stop_reason:
+                        current_turn += 1
+                        logger.debug(
+                            "Session %s turn %d ended (stop_reason=%s)",
+                            session.id, current_turn, stop_reason,
+                        )
+
                 elif msg_type == "result":
                     # Final result — session complete
                     result_text = data.get("result", "")
-                    if result_text and result_text != last_text:
-                        delta = result_text[len(last_text):] if result_text.startswith(last_text) else result_text
-                        if delta:
-                            session.full_output += delta
-                            session.output_buffer.append(delta)
+                    subtype = data.get("subtype", "success")
+                    is_error = data.get("is_error", False)
+
+                    if result_text:
+                        # Don't duplicate text already streamed — just ensure it's captured
+                        if not session.full_output.rstrip().endswith(result_text.rstrip()):
+                            session.output_buffer.append(result_text)
                             await self._emit(session, "cc_session_output", {
                                 "session_id": session.id,
-                                "content": delta,
+                                "content": result_text,
                             })
 
                     session.cost_usd = data.get("total_cost_usd", 0)
                     session.duration_ms = data.get("duration_ms", 0)
-                    session.status = "completed"
+                    session.status = "failed" if is_error else "completed"
 
                     await self._emit(session, "cc_session_complete", {
                         "session_id": session.id,
-                        "status": "completed",
+                        "status": session.status,
                         "cost_usd": session.cost_usd,
                         "duration_ms": session.duration_ms,
+                        "num_turns": data.get("num_turns", 0),
                     })
 
                     # Work registry
                     try:
                         from core.work_registry import work_registry
-                        await work_registry.update(session.id, "completed", {
+                        await work_registry.update(session.id, session.status, {
                             "cost_usd": session.cost_usd,
                             "duration_ms": session.duration_ms,
                         })
@@ -423,8 +534,9 @@ class ClaudeSessionManager:
                         pass
 
                     logger.info(
-                        "Session %s completed: $%.4f, %dms, %d tools",
-                        session.id, session.cost_usd, session.duration_ms,
+                        "Session %s %s: $%.4f, %dms, %d turns, %d tools",
+                        session.id, session.status, session.cost_usd,
+                        session.duration_ms, data.get("num_turns", 0),
                         len(session.tools_used),
                     )
 
@@ -450,6 +562,25 @@ class ClaudeSessionManager:
                 session.duration_ms = int((time.time() - session.created_at) * 1000)
 
             self._semaphore.release()
+
+    async def _stderr_reader(self, session: ClaudeSession) -> None:
+        """Read subprocess stderr and log errors."""
+        try:
+            async for line in session.process.stderr:
+                line_str = line.decode().strip()
+                if not line_str:
+                    continue
+                logger.warning("Session %s stderr: %s", session.id, line_str[:500])
+                # If it's an actual error, emit to client
+                if "error" in line_str.lower() or "Error" in line_str:
+                    await self._emit(session, "cc_session_error", {
+                        "session_id": session.id,
+                        "content": line_str[:500],
+                    })
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.debug("stderr reader ended for session %s: %s", session.id, e)
 
     async def _emit(self, session: ClaudeSession, msg_type: str, data: dict) -> None:
         """Send a WebSocket message for this session."""

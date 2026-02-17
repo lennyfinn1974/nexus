@@ -239,10 +239,12 @@ export function useChat() {
               name: msg.name ?? '',
               directory: msg.directory ?? '',
               status: 'running',
+              role: msg.role ?? '',
               output: '',
               toolsUsed: [],
               costUsd: 0,
               durationMs: 0,
+              numTurns: 0,
             },
           }))
         }
@@ -292,6 +294,7 @@ export function useChat() {
                 status: (msg.status as 'completed' | 'failed') ?? 'completed',
                 costUsd: msg.cost_usd ?? existing.costUsd,
                 durationMs: msg.duration_ms ?? existing.durationMs,
+                numTurns: msg.num_turns ?? existing.numTurns,
               },
             }
           })

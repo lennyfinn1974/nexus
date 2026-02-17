@@ -90,6 +90,8 @@ export interface WSMessage {
   status?: string
   cost_usd?: number
   tool_name?: string
+  role?: string
+  num_turns?: number
 }
 
 // ── Sub-Agent Types ──
@@ -123,8 +125,10 @@ export interface ClaudeSessionState {
   name: string
   directory: string
   status: 'running' | 'completed' | 'failed'
+  role: string
   output: string
   toolsUsed: string[]
   costUsd: number
   durationMs: number
+  numTurns: number
 }

@@ -179,6 +179,24 @@ class WorkRegistry:
             counts["total"] += 1
         return counts
 
+    async def clear_all(self) -> int:
+        """Clear all work items from cache and DB. Returns count removed."""
+        count = len(self._items)
+        self._items.clear()
+
+        # Clear from DB
+        db_count = 0
+        if self._db:
+            try:
+                db_count = await self._db.clear_all_work_items()
+            except Exception as e:
+                logger.warning(f"WorkRegistry DB clear failed: {e}")
+
+        # Emit a clear event so UIs refresh
+        await self._emit({"action": "clear_all", "count": max(count, db_count)}, "cleared")
+        logger.info(f"Work registry cleared: {count} cached, {db_count} from DB")
+        return max(count, db_count)
+
     # ── SSE Subscription ─────────────────────────────────────────
 
     def subscribe_sse(self) -> asyncio.Queue:

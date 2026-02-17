@@ -118,46 +118,56 @@ class AgentRunner:
         if should_orch:
             return await self._run_orchestrated(messages, strategy)
 
-        # 3c. Retrieve passive memory context (lightweight, ~200-400 tokens)
+        # 3c–3e. Retrieve memory, RAG, and KG context IN PARALLEL with timeout
+        # These were sequential before, adding 200-500ms. Now they race with
+        # a 2-second timeout so slow embedding calls don't block inference.
         memory_context = ""
-        passive_mem = getattr(s, "passive_memory", None)
-        if passive_mem:
-            try:
-                memory_context = await passive_mem.get_context_for_prompt(limit=5)
-            except Exception:
-                pass  # Never block on memory retrieval failure
-
-        # 3d. RAG — retrieve relevant memories for context enrichment
         rag_context = ""
-        rag_pipeline = getattr(s, "rag_pipeline", None)
-        if rag_pipeline and rag_pipeline.is_active:
-            try:
-                model_for_rag = self.force_model or "ollama"
-                # Fewer results for Ollama to keep context lean and inference fast
-                default_limit = 3 if model_for_rag == "ollama" else 5
-                rag_limit = int(s.cfg.get("RAG_MAX_RESULTS", str(default_limit)))
-                # Cap Ollama at 3 regardless of DB config (32K context is tight)
-                if model_for_rag == "ollama":
-                    rag_limit = min(rag_limit, 3)
-                rag_context = await rag_pipeline.retrieve(
-                    query=self.text,
-                    model=model_for_rag,
-                    limit=rag_limit,
-                    source_conv=self.conv_id,
-                )
-            except Exception:
-                pass  # Never block on RAG retrieval failure
-
-        # 3e. Knowledge Graph — find related entities for context
         kg_context = ""
+
+        passive_mem = getattr(s, "passive_memory", None)
+        rag_pipeline = getattr(s, "rag_pipeline", None)
         knowledge_graph = getattr(s, "knowledge_graph", None)
-        if knowledge_graph and knowledge_graph.entity_count > 0:
-            try:
-                kg_context = await knowledge_graph.query_related(
-                    text=self.text, limit=8, max_depth=2,
-                )
-            except Exception:
-                pass  # Never block on KG query failure
+
+        async def _get_memory():
+            if not passive_mem:
+                return ""
+            return await passive_mem.get_context_for_prompt(limit=5)
+
+        async def _get_rag():
+            if not (rag_pipeline and rag_pipeline.is_active):
+                return ""
+            model_for_rag = self.force_model or "ollama"
+            default_limit = 3 if model_for_rag == "ollama" else 5
+            rag_limit = int(s.cfg.get("RAG_MAX_RESULTS", str(default_limit)))
+            if model_for_rag == "ollama":
+                rag_limit = min(rag_limit, 3)
+            return await rag_pipeline.retrieve(
+                query=self.text,
+                model=model_for_rag,
+                limit=rag_limit,
+                source_conv=self.conv_id,
+            )
+
+        async def _get_kg():
+            if not (knowledge_graph and knowledge_graph.entity_count > 0):
+                return ""
+            return await knowledge_graph.query_related(
+                text=self.text, limit=8, max_depth=2,
+            )
+
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(_get_memory(), _get_rag(), _get_kg(), return_exceptions=True),
+                timeout=2.0,  # Hard 2s cap — never delay inference for memory
+            )
+            memory_context = results[0] if isinstance(results[0], str) else ""
+            rag_context = results[1] if isinstance(results[1], str) else ""
+            kg_context = results[2] if isinstance(results[2], str) else ""
+        except asyncio.TimeoutError:
+            logger.warning("Memory/RAG/KG retrieval timed out (2s) — proceeding without context")
+        except Exception:
+            pass  # Never block on retrieval failure
 
         # 4. Try each candidate model
         last_error: Exception | None = None

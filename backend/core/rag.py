@@ -112,6 +112,7 @@ class RAGPipeline:
         try:
             # 1. Embed the query
             query_embedding = await self.embeddings.embed(query)
+            embed_ms = int((time.time() - start) * 1000)
             if query_embedding is None:
                 return ""
 
@@ -119,15 +120,17 @@ class RAGPipeline:
             # Fetch a broad candidate pool so type-aware selection can find
             # knowledge memories even when conversation memories dominate
             # the top similarity scores (common for vague queries).
-            candidate_count = max(limit * 3, 50)
+            candidate_count = max(limit * 3, 20)
+            t_search = time.time()
             results = await self.cluster.search_memory(
                 query_embedding, limit=candidate_count
             )
+            search_ms = int((time.time() - t_search) * 1000)
 
             if not results:
                 logger.info(
                     f"RAG retrieve: no candidates for '{query[:60]}' "
-                    f"[{int((time.time() - start) * 1000)}ms]"
+                    f"[embed={embed_ms}ms, search={search_ms}ms]"
                 )
                 return ""
 
@@ -165,12 +168,12 @@ class RAGPipeline:
 
                 filtered.append(r)
 
-            elapsed_ms = int((time.time() - start) * 1000)
-
             if not filtered:
+                total_ms = int((time.time() - start) * 1000)
                 logger.info(
                     f"RAG retrieve: 0 results for '{query[:60]}' "
-                    f"({len(results)} candidates, all filtered) [{elapsed_ms}ms]"
+                    f"({len(results)} candidates, all filtered) "
+                    f"[embed={embed_ms}ms, search={search_ms}ms, total={total_ms}ms]"
                 )
                 return ""
 
@@ -202,28 +205,37 @@ class RAGPipeline:
                 # Knowledge already surfaces naturally — just truncate
                 filtered = filtered[:limit]
 
-            # Touch accessed memories (increment access_count for pruning)
-            for r in filtered:
-                mem_id = r.get("id")
-                if mem_id and self.cluster and self.cluster.memory_index:
-                    try:
-                        await self.cluster.memory_index._touch_memory(mem_id)
-                    except Exception:
-                        pass  # Non-critical — never block retrieval
+            # Touch accessed memories (fire-and-forget, non-blocking)
+            if self.cluster and self.cluster.memory_index:
+                try:
+                    mem_idx = self.cluster.memory_index
+                    pipe = mem_idx._redis.pipeline()
+                    now_ts = str(int(time.time()))
+                    for r in filtered:
+                        mem_id = r.get("id")
+                        if mem_id:
+                            key = mem_idx._mem_key(mem_id)
+                            pipe.hincrby(key, "access_count", 1)
+                            pipe.hset(key, "last_accessed", now_ts)
+                    await pipe.execute()
+                except Exception:
+                    pass  # Non-critical — never block retrieval
 
             # 5. Format for the model's context budget
             max_chars = RAG_CONTEXT_LIMITS.get(model, RAG_CONTEXT_LIMITS["ollama"])
             formatted = self._format_results(filtered, max_chars)
 
+            total_ms = int((time.time() - start) * 1000)
             self._total_retrievals += 1
-            self._total_retrieve_ms += int((time.time() - start) * 1000)
+            self._total_retrieve_ms += total_ms
 
             types_found = ", ".join(
                 sorted(set(r.get("memory_type", "?") for r in filtered))
             )
             logger.info(
                 f"RAG retrieve: {len(filtered)} results for '{query[:60]}' "
-                f"[types={types_found}] ({len(formatted)} chars) [{elapsed_ms}ms]"
+                f"[types={types_found}] ({len(formatted)} chars) "
+                f"[embed={embed_ms}ms, search={search_ms}ms, total={total_ms}ms]"
             )
 
             return formatted

@@ -148,6 +148,16 @@ class TerminalPlugin(NexusPlugin):
             self._claude_session_stop,
             category="code",
         )
+        self.add_tool(
+            "claude_multi_agent",
+            "Start multiple Claude Code agents for parallel coding (Boris Cherny pattern, up to 5 agents)",
+            {
+                "agents": "JSON array of agent specs, each with: prompt, name, role. Example: [{\"prompt\":\"Build API\",\"name\":\"builder\",\"role\":\"builder\"}]",
+                "directory": "Optional: working directory for all agents",
+            },
+            self._claude_multi_agent,
+            category="code",
+        )
 
     def register_commands(self):
         self.add_command("terminal", "Execute in Terminal: /terminal <command>", self._handle_terminal)
@@ -526,6 +536,41 @@ class TerminalPlugin(NexusPlugin):
         if ok:
             return f"✅ Session `{session_id}` stopped."
         return f"Error: session `{session_id}` not found"
+
+    async def _claude_multi_agent(self, params):
+        agents_str = params.get("agents", "").strip()
+        directory = params.get("directory", "~").strip()
+
+        if not agents_str:
+            return "Error: agents JSON array is required"
+
+        if not self._session_manager:
+            return "Error: Claude session manager not available"
+
+        try:
+            agents = json.loads(agents_str) if isinstance(agents_str, str) else agents_str
+        except (json.JSONDecodeError, ValueError) as e:
+            return f"Error parsing agents JSON: {e}"
+
+        if not isinstance(agents, list) or len(agents) == 0:
+            return "Error: agents must be a non-empty JSON array"
+
+        if len(agents) > 5:
+            return "Error: maximum 5 concurrent agents"
+
+        try:
+            sessions = await self._session_manager.create_multi_agent(
+                agents=agents,
+                directory=directory,
+            )
+            lines = [f"✅ Started **{len(sessions)} Claude Code agents** in `{directory}`:\n"]
+            for s in sessions:
+                role_label = f" ({s.role})" if s.role else ""
+                lines.append(f"  • `{s.id}` — **{s.name}**{role_label} — {s.model}")
+            lines.append(f"\nAll agents streaming output in real-time.")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"Error starting multi-agent sessions: {e}"
 
     # ────────────────────────────────────────────
     # Command Handlers
