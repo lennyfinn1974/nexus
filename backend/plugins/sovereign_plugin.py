@@ -33,6 +33,12 @@ class SovereignPlugin(NexusPlugin):
             "data", "sovereign"
         )
         self._active_procedure = None
+        self._session_manager = None
+        self._cc_session_id = None  # Active Claude Code session for BLD:APP
+
+    def set_session_manager(self, manager):
+        """Inject the Claude session manager (called from app.py post-setup)."""
+        self._session_manager = manager
 
     async def setup(self):
         """Try to import sovereign module from workspace.
@@ -360,6 +366,24 @@ class SovereignPlugin(NexusPlugin):
             "sessions": ["nexus-server", "nexus-dev", "nexus-logs", "nexus-work"],
         }
 
+        # Step 4: Start managed Claude Code session (if session manager available)
+        if self._session_manager:
+            try:
+                session = await self._session_manager.create_session(
+                    prompt=(
+                        f"You are working on the Nexus project at {project_dir}. "
+                        f"The dev environment is ready with tmux sessions: nexus-server (uvicorn), "
+                        f"nexus-dev (frontend), nexus-logs (tail), nexus-work (general). "
+                        f"You have full MCP access to all Nexus tools. Ready for instructions."
+                    ),
+                    directory=project_dir,
+                    name="nexus-build",
+                )
+                self._cc_session_id = session.id
+                lines.append(f"✅ Claude Code session: `{session.id}` (nexus-build)")
+            except Exception as e:
+                lines.append(f"⚠️  Claude Code session: {e}")
+
         lines.append(f"\n📂 Project: `{project_dir}`")
         lines.append(f"🖥️  Terminals: `tmux attach -t nexus-server` (or -dev, -logs, -work)")
         lines.append(f"\n✅ **Dev environment ready.** Claude Code has full MCP access to all Nexus tools.")
@@ -429,6 +453,15 @@ class SovereignPlugin(NexusPlugin):
             lines.append(f"✅ Stopped: {', '.join(stopped)}")
         else:
             lines.append("ℹ️  No procedure sessions running")
+
+        # Stop managed Claude Code session
+        if self._cc_session_id and self._session_manager:
+            try:
+                await self._session_manager.stop_session(self._cc_session_id)
+                lines.append(f"✅ Claude Code session `{self._cc_session_id}` stopped")
+                self._cc_session_id = None
+            except Exception:
+                pass
 
         # Reset model to auto for all websocket sessions
         try:

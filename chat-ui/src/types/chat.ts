@@ -53,6 +53,11 @@ export type WSMessageType =
   | 'sub_agent_progress'
   | 'sub_agent_complete'
   | 'work_item_update'
+  | 'cc_session_start'
+  | 'cc_session_output'
+  | 'cc_session_tool_use'
+  | 'cc_session_complete'
+  | 'cc_session_error'
 
 export interface WSMessage {
   type: WSMessageType
@@ -78,6 +83,13 @@ export interface WSMessage {
     status: string
     title: string
   }
+  // Claude Code session fields
+  session_id?: string
+  name?: string
+  directory?: string
+  status?: string
+  cost_usd?: number
+  tool_name?: string
 }
 
 // ── Sub-Agent Types ──
@@ -102,4 +114,17 @@ export interface OrchestrationState {
   strategy: string
   agents: SubAgentState[]
   active: boolean
+}
+
+// ── Claude Code Session Types ──
+
+export interface ClaudeSessionState {
+  id: string
+  name: string
+  directory: string
+  status: 'running' | 'completed' | 'failed'
+  output: string
+  toolsUsed: string[]
+  costUsd: number
+  durationMs: number
 }

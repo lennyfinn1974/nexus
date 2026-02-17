@@ -27,6 +27,12 @@ class TerminalPlugin(NexusPlugin):
     description = "Terminal, tmux, and Claude Code control — execute commands, manage sessions"
     version = "1.0.0"
 
+    _session_manager = None  # Injected by app.py after plugin load
+
+    def set_session_manager(self, manager):
+        """Inject the Claude session manager (called from app.py post-setup)."""
+        self._session_manager = manager
+
     async def setup(self):
         logger.info("  Terminal plugin ready")
         return True
@@ -102,33 +108,44 @@ class TerminalPlugin(NexusPlugin):
             category="code",
         )
 
-        # ── Claude Code Control ──
+        # ── Claude Code Interactive Sessions ──
         self.add_tool(
-            "claude_code_new",
-            "Start a new Claude Code session with a prompt",
-            {"prompt": "Initial prompt for Claude", "directory": "Optional: working directory (default: current dir)"},
-            self._claude_code_new,
+            "claude_session_start",
+            "Start a new persistent Claude Code session with bidirectional communication",
+            {
+                "prompt": "Initial prompt for Claude Code",
+                "directory": "Optional: working directory (default: home dir)",
+                "name": "Optional: session name for reference",
+            },
+            self._claude_session_start,
             category="code",
         )
         self.add_tool(
-            "claude_code_send",
-            "Send a message to an existing Claude Code session",
-            {"session_name": "Session name or identifier", "message": "Message to send"},
-            self._claude_code_send,
+            "claude_session_send",
+            "Send a follow-up message to a running Claude Code session",
+            {"session_id": "Session ID to send to", "message": "Message to send"},
+            self._claude_session_send,
             category="code",
         )
         self.add_tool(
-            "claude_code_read",
-            "Read the output from a Claude Code session",
-            {"session_name": "Session name or identifier"},
-            self._claude_code_read,
+            "claude_session_read",
+            "Read recent output from a Claude Code session",
+            {"session_id": "Session ID to read from", "last_n": "Optional: number of recent lines (default: 50)"},
+            self._claude_session_read,
             category="code",
         )
         self.add_tool(
-            "claude_code_list",
-            "List all active Claude Code sessions",
+            "claude_session_list",
+            "List all Claude Code sessions (active and recent)",
             {},
-            self._claude_code_list,
+            self._claude_session_list,
+            category="code",
+        )
+        self.add_tool(
+            "claude_session_stop",
+            "Stop a running Claude Code session",
+            {"session_id": "Session ID to stop"},
+            self._claude_session_stop,
             category="code",
         )
 
@@ -403,89 +420,112 @@ class TerminalPlugin(NexusPlugin):
             return f"Error: {e}"
 
     # ────────────────────────────────────────────
-    # Claude Code Control
+    # Claude Code Interactive Sessions
     # ────────────────────────────────────────────
 
-    async def _claude_code_new(self, params):
+    async def _claude_session_start(self, params):
         prompt = params.get("prompt", "").strip()
-        directory = params.get("directory", ".").strip()
+        directory = params.get("directory", "~").strip()
+        name = params.get("name", "").strip()
 
         if not prompt:
             return "Error: prompt is required"
 
-        directory = os.path.expanduser(directory)
-        if not os.path.exists(directory):
-            return f"Error: directory not found: {directory}"
+        if not self._session_manager:
+            return "Error: Claude session manager not available"
 
         try:
-            # Start Claude Code in the specified directory
-            proc = await asyncio.create_subprocess_exec(
-                "claude",
-                "code",
-                prompt,
-                cwd=directory,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            session = await self._session_manager.create_session(
+                prompt=prompt,
+                directory=directory,
+                name=name,
             )
-
-            # Give it a moment to start
-            await asyncio.sleep(1)
-
-            # Check if it's still running
-            if proc.returncode is not None:
-                stderr = await proc.stderr.read()
-                return f"Error starting Claude Code: {stderr.decode()}"
-
-            return f"✅ Started Claude Code session in {directory} with prompt: {prompt}"
-
-        except FileNotFoundError:
-            return "Error: claude command not found. Install Claude Code CLI first."
+            return (
+                f"✅ Started Claude Code session `{session.id}` ({session.name})\n"
+                f"Directory: {session.directory}\n"
+                f"Model: {session.model}\n\n"
+                f"Use `claude_session_read` with session_id=`{session.id}` to check output,\n"
+                f"or `claude_session_send` to send follow-up messages."
+            )
         except Exception as e:
-            return f"Error: {e}"
+            return f"Error starting session: {e}"
 
-    async def _claude_code_send(self, params):
-        session_name = params.get("session_name", "").strip()
+    async def _claude_session_send(self, params):
+        session_id = params.get("session_id", "").strip()
         message = params.get("message", "").strip()
 
-        if not session_name or not message:
-            return "Error: both session_name and message are required"
+        if not session_id or not message:
+            return "Error: both session_id and message are required"
 
-        # This is a placeholder - actual implementation would depend on
-        # how Claude Code sessions are managed and can be communicated with
-        # For now, we'll use tmux as a proxy if the session is running in tmux
+        if not self._session_manager:
+            return "Error: Claude session manager not available"
 
-        return await self._tmux_send({"session": session_name, "command": message})
+        ok = await self._session_manager.send_message(session_id, message)
+        if ok:
+            return f"✅ Sent follow-up to session `{session_id}` ({len(message)} chars)"
+        return f"Error: session `{session_id}` not found or not running"
 
-    async def _claude_code_read(self, params):
-        session_name = params.get("session_name", "").strip()
+    async def _claude_session_read(self, params):
+        session_id = params.get("session_id", "").strip()
+        last_n = int(params.get("last_n", "50"))
 
-        if not session_name:
-            return "Error: session_name is required"
+        if not session_id:
+            return "Error: session_id is required"
 
-        # Use tmux to capture output if running in tmux
-        return await self._tmux_capture({"session": session_name})
+        if not self._session_manager:
+            return "Error: Claude session manager not available"
 
-    async def _claude_code_list(self, params):
-        # Try to list Claude Code processes
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "ps",
-                "aux",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+        session = self._session_manager.get_session(session_id)
+        if not session:
+            return f"Error: session `{session_id}` not found"
+
+        output = self._session_manager.read_output(session_id, last_n)
+        status_icon = "🟢" if session.status == "running" else "✅" if session.status == "completed" else "❌"
+        header = f"{status_icon} Session `{session_id}` ({session.name}) — {session.status}"
+        if session.cost_usd > 0:
+            header += f" — ${session.cost_usd:.4f}"
+
+        if not output:
+            return f"{header}\n\n(no output yet)"
+
+        return f"{header}\n\n```\n{output}\n```"
+
+    async def _claude_session_list(self, params):
+        if not self._session_manager:
+            return "Error: Claude session manager not available"
+
+        sessions = self._session_manager.list_sessions()
+        if not sessions:
+            return "No Claude Code sessions found."
+
+        lines = []
+        for s in sessions:
+            icon = "🟢" if s["status"] == "running" else "✅" if s["status"] == "completed" else "❌"
+            lines.append(
+                f"| `{s['id']}` | {icon} {s['status']} | {s['name']} | "
+                f"{s['model']} | ${s.get('cost_usd', 0):.4f} | {len(s.get('tools_used', []))} tools |"
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
 
-            output = stdout.decode()
-            lines = [line for line in output.split("\n") if "claude" in line.lower() and "code" in line.lower()]
+        return (
+            "🤖 **Claude Code Sessions:**\n\n"
+            "| ID | Status | Name | Model | Cost | Tools |\n"
+            "|----|--------|------|-------|------|-------|\n"
+            + "\n".join(lines)
+        )
 
-            if not lines:
-                return "No Claude Code sessions found"
+    async def _claude_session_stop(self, params):
+        session_id = params.get("session_id", "").strip()
 
-            return f"🤖 **Claude Code Processes:**\n```\n" + "\n".join(lines) + "\n```"
+        if not session_id:
+            return "Error: session_id is required"
 
-        except Exception as e:
-            return f"Error: {e}"
+        if not self._session_manager:
+            return "Error: Claude session manager not available"
+
+        ok = await self._session_manager.stop_session(session_id)
+        if ok:
+            return f"✅ Session `{session_id}` stopped."
+        return f"Error: session `{session_id}` not found"
 
     # ────────────────────────────────────────────
     # Command Handlers
@@ -532,7 +572,7 @@ class TerminalPlugin(NexusPlugin):
         prompt = args.strip()
         if not prompt:
             return "Usage: /claude-code <prompt>"
-        return await self._claude_code_new({"prompt": prompt})
+        return await self._claude_session_start({"prompt": prompt})
 
     # ────────────────────────────────────────────
     # Helper

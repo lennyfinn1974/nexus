@@ -93,6 +93,7 @@ class AppState:
     plugin_manager: PluginManager = None
     tool_executor: Any = None
     cluster_manager: Any = None
+    claude_session_manager: Any = None
     telegram_channel: Any = None
     jwt_manager: JWTManager = None
     oauth_manager: OAuthManager = None
@@ -499,6 +500,22 @@ async def lifespan(app: FastAPI):
     if catalog_plugin and hasattr(catalog_plugin, "set_catalog"):
         catalog_plugin.set_catalog(state.skill_catalog, state.skills_engine)
 
+    # Claude Code Session Manager (persistent interactive sessions)
+    try:
+        from core.claude_session_manager import claude_session_manager
+
+        claude_code_cli = state.cfg.get("CLAUDE_CODE_CLI_PATH", "/opt/homebrew/bin/claude")
+        claude_session_manager.init(
+            cli_path=claude_code_cli,
+            mcp_config_path=mcp_config_path,
+            ws_manager=websocket_manager,
+            model=state.cfg.get("CLAUDE_CODE_MODEL", "sonnet"),
+        )
+        state.claude_session_manager = claude_session_manager
+        logger.info("Claude session manager initialized")
+    except Exception as e:
+        logger.warning(f"Claude session manager failed to initialize: {e}")
+
     # Headless browser renderer (Playwright — lazy init on first use)
     try:
         from core.headless import HeadlessRenderer
@@ -513,6 +530,18 @@ async def lifespan(app: FastAPI):
     except ImportError:
         state.headless_renderer = None
         logger.info("Headless renderer: Playwright not installed (optional)")
+
+    # Inject session manager into terminal plugin
+    if state.claude_session_manager:
+        terminal_plugin = state.plugin_manager.plugins.get("terminal")
+        if terminal_plugin and hasattr(terminal_plugin, "set_session_manager"):
+            terminal_plugin.set_session_manager(state.claude_session_manager)
+            logger.info("Session manager injected into terminal plugin")
+
+        sovereign_plugin = state.plugin_manager.plugins.get("sovereign")
+        if sovereign_plugin and hasattr(sovereign_plugin, "set_session_manager"):
+            sovereign_plugin.set_session_manager(state.claude_session_manager)
+            logger.info("Session manager injected into sovereign plugin")
 
     # Tool executor (Phase 6)
     try:
@@ -728,6 +757,8 @@ async def lifespan(app: FastAPI):
         await state.cluster_manager.stop()
     if getattr(state, "headless_renderer", None):
         await state.headless_renderer.close()
+    if getattr(state, "claude_session_manager", None):
+        await state.claude_session_manager.shutdown()
     if getattr(state, "reminder_manager", None):
         state.reminder_manager.stop()
     if getattr(state, "task_queue", None):

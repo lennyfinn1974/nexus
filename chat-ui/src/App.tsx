@@ -55,8 +55,10 @@ function ChatApp() {
     streamingModel,
     orchestration,
     activeWorkCount,
+    claudeSessions,
     connected,
     sendMessage,
+    sendToSession,
     newChat,
     loadConversation,
     deleteConversation,
@@ -104,8 +106,10 @@ function ChatApp() {
         streamingModel={streamingModel}
         currentConvId={currentConvId}
         orchestration={orchestration}
+        claudeSessions={claudeSessions}
         onSend={sendMessage}
         onAbort={abort}
+        onSendToSession={sendToSession}
       />
     </div>
   )

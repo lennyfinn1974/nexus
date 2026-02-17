@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWebSocket } from './use-websocket'
-import type { Message, Conversation, WSMessage, OrchestrationState } from '@/types/chat'
+import type { Message, Conversation, WSMessage, OrchestrationState, ClaudeSessionState } from '@/types/chat'
 
 export function useChat() {
   const [messages, setMessages] = useState<Message[]>([])
@@ -12,6 +12,7 @@ export function useChat() {
   const [streamingModel, setStreamingModel] = useState<string | null>(null)
   const [orchestration, setOrchestration] = useState<OrchestrationState | null>(null)
   const [activeWorkCount, setActiveWorkCount] = useState(0)
+  const [claudeSessions, setClaudeSessions] = useState<Record<string, ClaudeSessionState>>({})
   const streamContentRef = useRef('')
 
   // Refs for values that callbacks need without causing re-render cycles
@@ -226,6 +227,93 @@ export function useChat() {
         }
         break
       }
+
+      // ── Claude Code Session Messages ──
+
+      case 'cc_session_start':
+        if (msg.session_id) {
+          setClaudeSessions(prev => ({
+            ...prev,
+            [msg.session_id!]: {
+              id: msg.session_id!,
+              name: msg.name ?? '',
+              directory: msg.directory ?? '',
+              status: 'running',
+              output: '',
+              toolsUsed: [],
+              costUsd: 0,
+              durationMs: 0,
+            },
+          }))
+        }
+        break
+
+      case 'cc_session_output':
+        if (msg.session_id) {
+          setClaudeSessions(prev => {
+            const existing = prev[msg.session_id!]
+            if (!existing) return prev
+            return {
+              ...prev,
+              [msg.session_id!]: {
+                ...existing,
+                output: existing.output + (msg.content ?? ''),
+              },
+            }
+          })
+        }
+        break
+
+      case 'cc_session_tool_use':
+        if (msg.session_id && msg.tool_name) {
+          setClaudeSessions(prev => {
+            const existing = prev[msg.session_id!]
+            if (!existing) return prev
+            const tools = existing.toolsUsed.includes(msg.tool_name!)
+              ? existing.toolsUsed
+              : [...existing.toolsUsed, msg.tool_name!]
+            return {
+              ...prev,
+              [msg.session_id!]: { ...existing, toolsUsed: tools },
+            }
+          })
+        }
+        break
+
+      case 'cc_session_complete':
+        if (msg.session_id) {
+          setClaudeSessions(prev => {
+            const existing = prev[msg.session_id!]
+            if (!existing) return prev
+            return {
+              ...prev,
+              [msg.session_id!]: {
+                ...existing,
+                status: (msg.status as 'completed' | 'failed') ?? 'completed',
+                costUsd: msg.cost_usd ?? existing.costUsd,
+                durationMs: msg.duration_ms ?? existing.durationMs,
+              },
+            }
+          })
+        }
+        break
+
+      case 'cc_session_error':
+        if (msg.session_id) {
+          setClaudeSessions(prev => {
+            const existing = prev[msg.session_id!]
+            if (!existing) return prev
+            return {
+              ...prev,
+              [msg.session_id!]: {
+                ...existing,
+                status: 'failed',
+                output: existing.output + '\n\n❌ Error: ' + (msg.content ?? 'Unknown error'),
+              },
+            }
+          })
+        }
+        break
     }
   }, [loadConversations])
 
@@ -262,6 +350,10 @@ export function useChat() {
     // Send via WebSocket — backend expects "text" field, not "content"
     send({ type: 'chat', text: content })
   }, [isStreaming, send])
+
+  const sendToSession = useCallback((sessionId: string, text: string) => {
+    send({ type: 'cc_session_send', session_id: sessionId, text })
+  }, [send])
 
   const newChat = useCallback(() => {
     setMessages([])
@@ -317,8 +409,10 @@ export function useChat() {
     streamingModel,
     orchestration,
     activeWorkCount,
+    claudeSessions,
     connected,
     sendMessage,
+    sendToSession,
     newChat,
     loadConversation: switchConversation,
     deleteConversation,

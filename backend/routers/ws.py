@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import uuid
 from typing import Any
 
@@ -80,13 +81,21 @@ def _build_help_text() -> str:
 | `/multi code-review <task>` | Claude Code build + review (full MCP) |
 | `/multi verify <claim>` | Independent verification (2 verifiers) |
 
+## Claude Code Sessions
+| Command | Action |
+|---------|--------|
+| `/cc <prompt>` | Start a new interactive Claude Code session |
+| `/cc send <id> <msg>` | Send follow-up message to running session |
+| `/cc list` | List active Claude Code sessions |
+| `/cc stop [id]` | Stop session(s) — all if no ID given |
+
 ## Plugin Commands
 | Command | Action |
 |---------|--------|
 | `/sov <CMD:SUB>` | Sovereign procedure commands |
 | `/terminal <cmd>` | Execute in Terminal.app |
 | `/tmux <action>` | tmux session management |
-| `/claude-code <prompt>` | Start Claude Code session |
+| `/claude-code <prompt>` | Start Claude Code session (legacy) |
 | `/workspace` | Show workspace info |
 
 ## Tips
@@ -126,6 +135,20 @@ async def websocket_chat(ws: WebSocket):
                 if current_runner:
                     current_runner.abort.set()
                     logger.info(f"[{ws_id}] Abort requested")
+                continue
+
+            # ── Claude Code session follow-up ──
+            if msg.get("type") == "cc_session_send":
+                session_id = msg.get("session_id", "")
+                text_payload = msg.get("text", "")
+                if session_id and text_payload and hasattr(s, "claude_session_manager") and s.claude_session_manager:
+                    ok = await s.claude_session_manager.send_message(session_id, text_payload)
+                    if not ok:
+                        await websocket_manager.send_to_client(ws_id, {
+                            "type": "cc_session_error",
+                            "session_id": session_id,
+                            "content": "Session not found or not running",
+                        })
                 continue
 
             # ── Switch conversation ──
@@ -196,6 +219,11 @@ async def websocket_chat(ws: WebSocket):
                 else:
                     models_help = "Available: `local` `claude` `code` `auto` (or aliases: `cloud` `api` `kimi` `agentic` `mcp` `agent`)"
                     await websocket_manager.send_to_client(ws_id, {"type": "system", "content": f"Unknown model '{choice}'. {models_help}"})
+                continue
+
+            # ── /cc — Claude Code interactive sessions ──
+            if text_lower == "/cc" or text.startswith("/cc "):
+                await _handle_cc_command(ws_id, text, s)
                 continue
 
             # ── /multi — sub-agent orchestration ──
@@ -403,6 +431,128 @@ async def _handle_multi_command(ws_id: str, text: str, s: Any) -> None:
         await websocket_manager.send_to_client(
             ws_id,
             {"type": "error", "content": f"Sub-agent orchestration failed: {e}"},
+        )
+
+
+async def _handle_cc_command(ws_id: str, text: str, s: Any) -> None:
+    """Handle /cc slash command for Claude Code interactive sessions.
+
+    Usage:
+        /cc <prompt>             — start new session
+        /cc send <id> <message>  — follow-up to running session
+        /cc list                 — list active sessions
+        /cc stop [id]            — stop session(s)
+    """
+    mgr = getattr(s, "claude_session_manager", None)
+    if not mgr:
+        await websocket_manager.send_to_client(
+            ws_id, {"type": "system", "content": "Claude Code session manager not available."}
+        )
+        return
+
+    arg = text[3:].strip()  # strip "/cc"
+    if not arg:
+        await websocket_manager.send_to_client(
+            ws_id,
+            {
+                "type": "system",
+                "content": (
+                    "**Claude Code Sessions:**\n\n"
+                    "| Command | Description |\n"
+                    "|---------|-------------|\n"
+                    "| `/cc <prompt>` | Start a new Claude Code session |\n"
+                    "| `/cc send <id> <msg>` | Send follow-up to a session |\n"
+                    "| `/cc list` | List active sessions |\n"
+                    "| `/cc stop [id]` | Stop session(s) |\n"
+                ),
+            },
+        )
+        return
+
+    parts = arg.split(None, 1)
+    sub_cmd = parts[0].lower()
+    payload = parts[1] if len(parts) > 1 else ""
+
+    if sub_cmd == "list":
+        sessions = mgr.list_sessions()
+        if not sessions:
+            await websocket_manager.send_to_client(
+                ws_id, {"type": "system", "content": "No active Claude Code sessions."}
+            )
+        else:
+            lines = []
+            for sess in sessions:
+                status_icon = "🟢" if sess["status"] == "running" else "✅" if sess["status"] == "completed" else "❌"
+                lines.append(
+                    f"| `{sess['id']}` | {status_icon} {sess['status']} | {sess['name']} | ${sess.get('cost_usd', 0):.4f} |"
+                )
+            table = (
+                "**Claude Code Sessions:**\n\n"
+                "| ID | Status | Name | Cost |\n"
+                "|-----|--------|------|------|\n"
+                + "\n".join(lines)
+            )
+            await websocket_manager.send_to_client(ws_id, {"type": "system", "content": table})
+        return
+
+    if sub_cmd == "stop":
+        if payload:
+            ok = await mgr.stop_session(payload.strip())
+            msg_text = f"✅ Session `{payload.strip()}` stopped." if ok else f"❌ Session `{payload.strip()}` not found."
+        else:
+            # Stop all running sessions
+            sessions = mgr.list_sessions()
+            stopped = 0
+            for sess in sessions:
+                if sess["status"] == "running":
+                    await mgr.stop_session(sess["id"])
+                    stopped += 1
+            msg_text = f"✅ Stopped {stopped} session(s)." if stopped > 0 else "No running sessions to stop."
+        await websocket_manager.send_to_client(ws_id, {"type": "system", "content": msg_text})
+        return
+
+    if sub_cmd == "send":
+        send_parts = payload.split(None, 1) if payload else []
+        if len(send_parts) < 2:
+            await websocket_manager.send_to_client(
+                ws_id, {"type": "system", "content": "Usage: `/cc send <session_id> <message>`"}
+            )
+            return
+        sid, msg_text = send_parts
+        ok = await mgr.send_message(sid, msg_text)
+        if ok:
+            await websocket_manager.send_to_client(
+                ws_id, {"type": "system", "content": f"📨 Sent to session `{sid}`"}
+            )
+        else:
+            await websocket_manager.send_to_client(
+                ws_id, {"type": "cc_session_error", "session_id": sid, "content": "Session not found or not running"}
+            )
+        return
+
+    # Default: start a new session with the full arg as prompt
+    prompt = arg
+    session_data = websocket_manager.get_session_data(ws_id)
+    conv_id = session_data.get("conv_id") if session_data else None
+
+    try:
+        session = await mgr.create_session(
+            prompt=prompt,
+            directory=os.path.expanduser("~"),
+            ws_id=ws_id,
+            conv_id=conv_id,
+        )
+        await websocket_manager.send_to_client(
+            ws_id,
+            {
+                "type": "system",
+                "content": f"🚀 Claude Code session started: `{session.id}` — *{session.name}*\n\nOutput will stream below.",
+            },
+        )
+    except Exception as e:
+        logger.error(f"Failed to create CC session: {e}", exc_info=True)
+        await websocket_manager.send_to_client(
+            ws_id, {"type": "error", "content": f"Failed to start Claude Code session: {e}"}
         )
 
 

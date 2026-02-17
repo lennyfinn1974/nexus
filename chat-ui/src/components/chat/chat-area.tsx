@@ -3,7 +3,8 @@ import { Sparkles, Download } from 'lucide-react'
 import MessageBubble from './message-bubble'
 import MessageInput from './message-input'
 import SubAgentPanel from './sub-agent-panel'
-import type { Message, OrchestrationState } from '@/types/chat'
+import ClaudeSessionPanel from './claude-session-panel'
+import type { Message, OrchestrationState, ClaudeSessionState } from '@/types/chat'
 
 interface ChatAreaProps {
   messages: Message[]
@@ -11,8 +12,10 @@ interface ChatAreaProps {
   streamingModel: string | null
   currentConvId: string | null
   orchestration: OrchestrationState | null
+  claudeSessions: Record<string, ClaudeSessionState>
   onSend: (content: string) => void
   onAbort: () => void
+  onSendToSession: (sessionId: string, text: string) => void
 }
 
 export default function ChatArea({
@@ -21,17 +24,19 @@ export default function ChatArea({
   streamingModel,
   currentConvId,
   orchestration,
+  claudeSessions,
   onSend,
   onAbort,
+  onSendToSession,
 }: ChatAreaProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  // Auto-scroll to bottom on new messages or orchestration updates
+  // Auto-scroll to bottom on new messages, orchestration updates, or session output
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
-  }, [messages, orchestration])
+  }, [messages, orchestration, claudeSessions])
 
   const handleExport = (format: 'markdown' | 'json') => {
     if (!currentConvId) return
@@ -116,6 +121,14 @@ export default function ChatArea({
         {/* Sub-Agent Panel — shown during orchestration */}
         {orchestration && orchestration.agents.length > 0 && (
           <SubAgentPanel orchestration={orchestration} />
+        )}
+
+        {/* Claude Code Session Panel — shown when sessions exist */}
+        {Object.keys(claudeSessions).length > 0 && (
+          <ClaudeSessionPanel
+            sessions={claudeSessions}
+            onSendToSession={onSendToSession}
+          />
         )}
 
         {/* Typing indicator */}
