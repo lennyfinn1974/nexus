@@ -37,7 +37,7 @@ PRIORITIES = ("high", "normal", "low")
 DEFAULT_GROUP = "nexus:workers"
 RESULT_TTL = 3600  # 1 hour TTL for result keys
 MAX_RETRIES = 3
-CLAIM_TIMEOUT_MS = 60_000  # 60 seconds before a task can be reclaimed
+CLAIM_TIMEOUT_MS = 300_000  # 5 minutes before a task can be reclaimed (Claude Code research can take 2-3 min)
 
 
 @dataclass
@@ -55,7 +55,7 @@ class TaskMessage:
     parent_id: str = ""
     role: str = ""
     max_tokens: int = 4096
-    timeout_ms: int = 60_000
+    timeout_ms: int = 300_000
     created_at: int = 0
     attempt: int = 0
 
@@ -80,7 +80,7 @@ class TaskMessage:
             parent_id=data.get("parent_id", ""),
             role=data.get("role", ""),
             max_tokens=int(data.get("max_tokens", 4096)),
-            timeout_ms=int(data.get("timeout_ms", 60000)),
+            timeout_ms=int(data.get("timeout_ms", 300000)),
             created_at=int(data.get("created_at", 0)),
             attempt=int(data.get("attempt", 0)),
         )
@@ -212,13 +212,15 @@ class TaskStream:
         parent_id: str = "",
         role: str = "",
         max_tokens: int = 4096,
-        timeout_ms: int = 60_000,
+        timeout_ms: int = 300_000,
+        task_id: str = "",
     ) -> str:
         """Publish a task to the stream.
 
         Returns the task_id (not the Redis stream message ID).
         """
-        task_id = f"task-{uuid.uuid4().hex[:12]}"
+        if not task_id:
+            task_id = f"task-{uuid.uuid4().hex[:12]}"
 
         message = {
             "task_id": task_id,
@@ -316,6 +318,13 @@ class TaskStream:
         try:
             logger.info(f"Processing task {task.task_id} ({task.task_type})")
 
+            # Update work registry to running
+            try:
+                from core.work_registry import work_registry
+                await work_registry.update(task.task_id, "running")
+            except Exception:
+                pass
+
             # Execute with timeout
             timeout_s = task.timeout_ms / 1000
             result = await asyncio.wait_for(
@@ -335,15 +344,32 @@ class TaskStream:
             await self._ack(task)
             self._completed += 1
 
+            # Update work registry to completed
+            try:
+                from core.work_registry import work_registry
+                await work_registry.update(task.task_id, "completed")
+            except Exception:
+                pass
+
             logger.info(f"Completed task {task.task_id}")
 
         except asyncio.TimeoutError:
             logger.warning(f"Task {task.task_id} timed out after {task.timeout_ms}ms")
             await self._handle_failure(task, "timeout")
+            try:
+                from core.work_registry import work_registry
+                await work_registry.update(task.task_id, "failed", {"error": "timeout"})
+            except Exception:
+                pass
 
         except Exception as e:
             logger.error(f"Task {task.task_id} failed: {e}")
             await self._handle_failure(task, str(e))
+            try:
+                from core.work_registry import work_registry
+                await work_registry.update(task.task_id, "failed", {"error": str(e)})
+            except Exception:
+                pass
 
     async def _ack(self, task: TaskMessage) -> None:
         """Acknowledge a task (remove from pending entries list)."""

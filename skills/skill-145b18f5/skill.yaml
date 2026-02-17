@@ -1,0 +1,21 @@
+author: user
+description: Research on Krea AI's prompt-to-workflow feature and architectural blueprint
+  for building equivalent NL-to-DAG agent orchestration in Nexus using Claude Code
+  subagents, MCP, and multi-agent patterns.
+domain: AI Workflow Automation & Agent Orchestration
+id: skill-145b18f5
+name: krea-prompt-to-workflow-nexus
+triggers:
+  keywords:
+  - krea-ai
+  - prompt-to-workflow
+  - node-workflows
+  - claude-code
+  - subagents
+  - MCP
+  - DAG-generation
+  - agent-orchestration
+  - nexus
+  - workflow-automation
+type: knowledge
+version: '1.0'

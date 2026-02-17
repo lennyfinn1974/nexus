@@ -26,7 +26,7 @@ logger = logging.getLogger("nexus.rag")
 
 # Model-aware context budgets (chars, not tokens)
 RAG_CONTEXT_LIMITS = {
-    "ollama": 6000,       # ~1500 tokens — tight for 32K context
+    "ollama": 3000,       # ~750 tokens — keep tight for fast 32K inference
     "claude": 24000,      # ~6000 tokens — generous for 200K
     "claude_code": 24000,
 }
@@ -116,11 +116,19 @@ class RAGPipeline:
                 return ""
 
             # 2. Search memory index
+            # Fetch a broad candidate pool so type-aware selection can find
+            # knowledge memories even when conversation memories dominate
+            # the top similarity scores (common for vague queries).
+            candidate_count = max(limit * 3, 50)
             results = await self.cluster.search_memory(
-                query_embedding, limit=limit * 2  # Fetch extra for filtering
+                query_embedding, limit=candidate_count
             )
 
             if not results:
+                logger.info(
+                    f"RAG retrieve: no candidates for '{query[:60]}' "
+                    f"[{int((time.time() - start) * 1000)}ms]"
+                )
                 return ""
 
             # 3. Filter and rank
@@ -135,22 +143,73 @@ class RAGPipeline:
                 if memory_types and r.get("memory_type") not in memory_types:
                     continue
 
-                # Filter by source conversation if specified
-                if source_conv and r.get("source_conv") == source_conv:
-                    # Skip results from the SAME conversation (already in context)
+                # Filter out same-conversation results ONLY for conversation type
+                # (web_content, skill_knowledge, fact should always surface)
+                mem_type = r.get("memory_type", "")
+                if (
+                    source_conv
+                    and r.get("source_conv") == source_conv
+                    and mem_type == MEMORY_TYPE_CONVERSATION
+                ):
                     continue
 
                 text = r.get("text", "")
                 if len(text) < MIN_TEXT_LENGTH:
                     continue
 
+                # Boost structured knowledge types (lower score = more similar)
+                # 0.8x gives knowledge a 20% advantage — helps it surface for
+                # semi-specific queries without needing the slot reservation
+                if mem_type in (MEMORY_TYPE_WEB, MEMORY_TYPE_SKILL, MEMORY_TYPE_FACT):
+                    r["score"] = score * 0.8
+
                 filtered.append(r)
 
+            elapsed_ms = int((time.time() - start) * 1000)
+
             if not filtered:
+                logger.info(
+                    f"RAG retrieve: 0 results for '{query[:60]}' "
+                    f"({len(results)} candidates, all filtered) [{elapsed_ms}ms]"
+                )
                 return ""
 
-            # 4. Truncate to limit
-            filtered = filtered[:limit]
+            # 4. Type-aware selection — guarantee knowledge types surface
+            #    Without this, vague queries return only conversation memories
+            #    (which match on phrasing) and crowd out rich skill_knowledge.
+            filtered.sort(key=lambda x: x.get("score", 1.0))
+
+            # Check if knowledge types are already in the top N
+            KNOWLEDGE_TYPES = {MEMORY_TYPE_SKILL, MEMORY_TYPE_WEB, MEMORY_TYPE_FACT, MEMORY_TYPE_DOCUMENT}
+            top_n = filtered[:limit]
+            has_knowledge_in_top = any(
+                r.get("memory_type", "") in KNOWLEDGE_TYPES for r in top_n
+            )
+            knowledge_available = any(
+                r.get("memory_type", "") in KNOWLEDGE_TYPES for r in filtered
+            )
+
+            if not has_knowledge_in_top and knowledge_available:
+                # Knowledge exists in candidates but was crowded out by conversation.
+                # Reserve 1 slot for the best knowledge result.
+                knowledge = [r for r in filtered if r.get("memory_type", "") in KNOWLEDGE_TYPES]
+                conversation = [r for r in filtered if r.get("memory_type", "") not in KNOWLEDGE_TYPES]
+                # Best knowledge result + fill remaining with conversation
+                selected = knowledge[:1] + conversation[: limit - 1]
+                selected.sort(key=lambda x: x.get("score", 1.0))
+                filtered = selected
+            else:
+                # Knowledge already surfaces naturally — just truncate
+                filtered = filtered[:limit]
+
+            # Touch accessed memories (increment access_count for pruning)
+            for r in filtered:
+                mem_id = r.get("id")
+                if mem_id and self.cluster and self.cluster.memory_index:
+                    try:
+                        await self.cluster.memory_index._touch_memory(mem_id)
+                    except Exception:
+                        pass  # Non-critical — never block retrieval
 
             # 5. Format for the model's context budget
             max_chars = RAG_CONTEXT_LIMITS.get(model, RAG_CONTEXT_LIMITS["ollama"])
@@ -159,11 +218,13 @@ class RAGPipeline:
             self._total_retrievals += 1
             self._total_retrieve_ms += int((time.time() - start) * 1000)
 
-            if formatted:
-                logger.debug(
-                    f"RAG retrieved {len(filtered)} results for query "
-                    f"({len(formatted)} chars, {int((time.time() - start) * 1000)}ms)"
-                )
+            types_found = ", ".join(
+                sorted(set(r.get("memory_type", "?") for r in filtered))
+            )
+            logger.info(
+                f"RAG retrieve: {len(filtered)} results for '{query[:60]}' "
+                f"[types={types_found}] ({len(formatted)} chars) [{elapsed_ms}ms]"
+            )
 
             return formatted
 
@@ -323,6 +384,180 @@ class RAGPipeline:
             chunk_size=1000,
             chunk_overlap=150,
         )
+
+    async def ingest_web_content(
+        self,
+        user_query: str,
+        web_results: list[dict],
+        conv_id: str = "",
+    ) -> Optional[str]:
+        """Ingest condensed web search results into memory.
+
+        Condenses multiple web tool results into a single structured memory
+        (~1500 chars) with one embedding call. Memory-efficient: no raw HTML dumps.
+
+        Args:
+            user_query: The user's original question
+            web_results: List of dicts from AgentAttempt.web_results
+            conv_id: Source conversation ID
+
+        Returns:
+            Memory ID if stored, None if skipped
+        """
+        if not self.is_active or not web_results:
+            return None
+
+        start = time.time()
+        try:
+            # Extract search query from google_search results
+            search_query = ""
+            fetch_contents: list[str] = []
+            source_urls: list[str] = []
+
+            for wr in web_results:
+                tool = wr.get("tool", "")
+                query_data = wr.get("query", {})
+                result_text = wr.get("result", "")
+
+                if tool == "google_search":
+                    # Extract the search query
+                    if isinstance(query_data, dict):
+                        search_query = query_data.get("query", query_data.get("q", ""))
+                    elif isinstance(query_data, str):
+                        search_query = query_data
+
+                elif tool in ("web_fetch", "web_fetch_rendered"):
+                    # Extract URL and content
+                    url = ""
+                    if isinstance(query_data, dict):
+                        url = query_data.get("url", "")
+                    elif isinstance(query_data, str):
+                        url = query_data
+                    if url:
+                        source_urls.append(url)
+
+                    # Take first 600 chars of meaningful content
+                    if result_text:
+                        content = self._extract_key_content(result_text, max_chars=600)
+                        if content and len(content) > MIN_TEXT_LENGTH:
+                            fetch_contents.append(content)
+
+            if not fetch_contents and not search_query:
+                return None
+
+            # Build condensed memory (target ~1500 chars)
+            topic = search_query or user_query[:200]
+            parts = [f"Topic: {topic}"]
+
+            # Max 3 web results
+            for i, content in enumerate(fetch_contents[:3]):
+                parts.append(f"Content {i + 1}: {content}")
+
+            if source_urls:
+                parts.append("Sources: " + ", ".join(source_urls[:3]))
+
+            condensed = "\n\n".join(parts)
+            if len(condensed) > 2000:
+                condensed = condensed[:2000]
+
+            if len(condensed) < MIN_TEXT_LENGTH:
+                return None
+
+            # Embed and store
+            embedding = await self.embeddings.embed(condensed)
+            if embedding is None:
+                return None
+
+            memory_id = await self.cluster.store_memory(
+                text=condensed,
+                embedding=embedding,
+                memory_type=MEMORY_TYPE_WEB,
+                source_conv=conv_id,
+            )
+
+            self._total_ingests += 1
+            self._total_ingest_ms += int((time.time() - start) * 1000)
+
+            if memory_id:
+                logger.info(
+                    f"RAG ingested web content: {len(condensed)} chars, "
+                    f"{len(fetch_contents)} pages ({conv_id[:8] if conv_id else 'no-conv'})"
+                )
+
+            return memory_id
+
+        except Exception as e:
+            logger.warning(f"RAG web content ingest error: {e}")
+            return None
+
+    async def prune_old_memories(
+        self,
+        web_max_days: int = 30,
+        conv_max_days: int = 14,
+    ) -> int:
+        """Prune stale memories that have never been retrieved.
+
+        - web_content older than web_max_days with 0 access → delete
+        - conversation older than conv_max_days with 0 access → delete
+        - skill_knowledge and fact types are never auto-pruned
+
+        Returns:
+            Number of memories pruned
+        """
+        if not self.is_active:
+            return 0
+
+        try:
+            memory_index = self.cluster.memory_index
+            if not memory_index:
+                return 0
+
+            pruned = 0
+            now = time.time()
+            web_cutoff = now - (web_max_days * 86400)
+            conv_cutoff = now - (conv_max_days * 86400)
+
+            # Scan all memories and collect prunable IDs
+            all_memories = await memory_index.scan_all()
+            prune_ids: list[str] = []
+
+            for mem in all_memories:
+                mem_type = mem.get("memory_type", "")
+                created_at = mem.get("created_at", 0)
+                access_count = mem.get("access_count", 0)
+                mem_id = mem.get("id", "")
+
+                if not mem_id or not created_at:
+                    continue
+
+                # Skip curated types
+                if mem_type in (MEMORY_TYPE_SKILL, MEMORY_TYPE_FACT):
+                    continue
+
+                # Prune web content after web_max_days with no retrieval
+                if mem_type == MEMORY_TYPE_WEB and created_at < web_cutoff and access_count == 0:
+                    prune_ids.append(mem_id)
+
+                # Prune conversations after conv_max_days with no retrieval
+                elif mem_type == MEMORY_TYPE_CONVERSATION and created_at < conv_cutoff and access_count == 0:
+                    prune_ids.append(mem_id)
+
+            # Delete in batches
+            for mem_id in prune_ids:
+                try:
+                    await memory_index.delete(mem_id)
+                    pruned += 1
+                except Exception:
+                    pass
+
+            if pruned > 0:
+                logger.info(f"RAG pruned {pruned} stale memories (web:{web_max_days}d, conv:{conv_max_days}d)")
+
+            return pruned
+
+        except Exception as e:
+            logger.warning(f"RAG pruning error: {e}")
+            return 0
 
     def _condense_exchange(self, user_msg: str, assistant_msg: str) -> str:
         """Condense a conversation exchange into a storable format.

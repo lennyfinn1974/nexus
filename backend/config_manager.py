@@ -480,13 +480,13 @@ SETTINGS_SCHEMA: list[dict] = [
     # Clustering (Phase 6)
     {
         "key": "CLUSTER_ENABLED",
-        "default": "false",
+        "default": "true",
         "encrypted": False,
         "category": "Clustering",
         "label": "Enable Agent Clustering",
         "type": "select",
-        "description": "Enable Redis-based agent clustering for multi-instance coordination (requires Redis)",
-        "options": ["false", "true"],
+        "description": "Enable Redis-based agent clustering for coordination, RAG, and working memory (requires Redis)",
+        "options": ["true", "false"],
     },
     {
         "key": "REDIS_URL",
@@ -588,6 +588,17 @@ SETTINGS_SCHEMA: list[dict] = [
         "min": 2,
         "max": 30,
     },
+    {
+        "key": "CLUSTER_MIN_SECONDARIES",
+        "default": "0",
+        "encrypted": False,
+        "category": "Clustering",
+        "label": "Min Secondaries Required",
+        "type": "number",
+        "description": "Minimum secondary agents required before primary accepts work. 0 = single-node OK (default). Set to 1+ when running multi-agent cluster.",
+        "min": 0,
+        "max": 10,
+    },
     # Setup
     {
         "key": "SETUP_COMPLETE",
@@ -616,7 +627,7 @@ CLUSTER_KEYS = {
     "CLUSTER_ENABLED", "REDIS_URL", "REDIS_PASSWORD", "REDIS_TLS",
     "REDIS_KEY_PREFIX", "CLUSTER_AGENT_ID", "CLUSTER_ROLE",
     "CLUSTER_MAX_LOAD", "CLUSTER_HEARTBEAT_INTERVAL", "CLUSTER_FAILURE_THRESHOLD",
-    "CLUSTER_ELECTION_TIMEOUT",
+    "CLUSTER_ELECTION_TIMEOUT", "CLUSTER_MIN_SECONDARIES",
 }
 
 
@@ -973,7 +984,7 @@ class ConfigManager:
 
     @property
     def cluster_enabled(self):
-        return self.get_bool("CLUSTER_ENABLED", False)
+        return self.get_bool("CLUSTER_ENABLED", True)
 
     @property
     def redis_url(self):
@@ -1029,5 +1040,6 @@ class ConfigManager:
             "CLUSTER_HEARTBEAT_INTERVAL": self.cluster_heartbeat_interval,
             "CLUSTER_FAILURE_THRESHOLD": self.cluster_failure_threshold,
             "CLUSTER_ELECTION_TIMEOUT": self.cluster_election_timeout,
+            "CLUSTER_MIN_SECONDARIES": int(self.get("CLUSTER_MIN_SECONDARIES", "0")),
             "CLUSTER_VECTOR_DIMS": int(self.get("EMBEDDING_DIMS", "768")),
         }

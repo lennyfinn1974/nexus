@@ -23,6 +23,16 @@ logger = logging.getLogger("nexus.tools.selector")
 # A message may match multiple categories; they are ranked by total weight.
 
 CATEGORY_PATTERNS: dict[str, list[tuple[str, int]]] = {
+    "chat": [
+        # Conversational / knowledge recall — no tools needed, RAG handles it
+        (r"\b(what do you know|what did you learn|tell me about|what is|who is)\b", 3),
+        (r"\b(explain|describe|summarize|what'?s the difference)\b", 2),
+        (r"\b(do you (know|remember)|have you (seen|heard))\b", 3),
+        (r"^(test|testing|check|let'?s (test|try|check))\b", 3),
+        (r"\b(how does|how do|what are|why is|why does)\b", 2),
+        (r"\b(can you|could you|would you)\b.*\b(tell|explain|describe|help me understand)\b", 2),
+        (r"\b(my|your) (opinion|thoughts|take)\b", 2),
+    ],
     "web": [
         (r"\b(google|find online|web search|browse the web|look up online)\b", 2),
         (r"\b(search for|search the web|search online)\b", 2),
@@ -59,7 +69,7 @@ CATEGORY_PATTERNS: dict[str, list[tuple[str, int]]] = {
         (r"\b(run command|execute|terminal|bash|shell|command line|CLI)\b", 2),
         (r"\b(tmux|session|new session|send command)\b", 2),
         (r"\b(pip|npm|git|docker|make|cargo|brew)\b", 1),
-        (r"\b(compile|build|deploy|test)\b", 1),
+        (r"\b(compile|build|deploy|tests?)\b", 1),
     ],
     "memory": [
         (r"\b(remember|recall|what do (i|you) know)\b", 3),
@@ -152,21 +162,27 @@ class ToolSelector:
 
         Strategy
         --------
-        1. Always include CORE_TOOL_NAMES (5 tools).
-        2. Primary category → all its tools (up to 10).
-        3. Secondary categories → top 3 tools each.
-        4. Cap at *max_tools*.
+        1. If "chat" is primary intent, return NO tools (streaming mode, fastest).
+        2. Always include CORE_TOOL_NAMES (2 tools).
+        3. Primary category → all its tools (up to 10).
+        4. Secondary categories → top 3 tools each.
+        5. Cap at *max_tools*.
         """
+        # 1. Classify intent first
+        categories = self.classify_intent(message)
+        logger.info(f"Tool selection — intent: {categories}")
+
+        # Chat-primary intent: no tools → Ollama uses fast streaming path
+        if categories and categories[0] == "chat":
+            logger.info("Selected 0 tools: chat intent (no tools needed)")
+            return []
+
         selected: dict[str, ToolDefinition] = {}
 
-        # 1. Core essentials
+        # 2. Core essentials
         for tool_name in CORE_TOOL_NAMES:
             if tool_name in self._by_name:
                 selected[tool_name] = self._by_name[tool_name]
-
-        # 2. Classify intent
-        categories = self.classify_intent(message)
-        logger.info(f"Tool selection — intent: {categories}")
 
         # 3. Fill from matched categories
         for i, category in enumerate(categories):

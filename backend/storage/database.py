@@ -456,12 +456,66 @@ class Database:
                 text("""
                     DELETE FROM work_items
                     WHERE status IN ('completed', 'failed', 'cancelled')
-                      AND created_at < NOW() - INTERVAL ':days days'
+                      AND created_at < NOW() - MAKE_INTERVAL(days => :days)
                 """),
                 {"days": days},
             )
             await session.commit()
             return result.rowcount
+
+    async def fix_stale_work_items(self) -> int:
+        """Mark stale 'pending' and 'running' work items as completed/failed.
+
+        Tasks stuck in pending for >15 minutes are likely completed via Redis
+        Stream but never synced back to PostgreSQL. Other work items stuck
+        for >1 hour are likely orphaned from server restarts.
+        """
+        total = 0
+        async with self._session_factory() as session:
+            # Tasks: shorter threshold (15 min) — they run fast via Redis Streams
+            result = await session.execute(
+                text("""
+                    UPDATE work_items
+                    SET status = 'completed',
+                        completed_at = NOW(),
+                        metadata = COALESCE(metadata, '{}'::jsonb) || '{"auto_fixed": "stale_sync"}'::jsonb
+                    WHERE status = 'pending'
+                      AND kind = 'task'
+                      AND created_at < NOW() - INTERVAL '15 minutes'
+                """),
+            )
+            total += result.rowcount
+
+            # Running tasks that have been running for >30 min — likely failed
+            result = await session.execute(
+                text("""
+                    UPDATE work_items
+                    SET status = 'failed',
+                        completed_at = NOW(),
+                        metadata = COALESCE(metadata, '{}'::jsonb) || '{"auto_failed": "stale_cleanup"}'::jsonb
+                    WHERE status = 'running'
+                      AND kind = 'task'
+                      AND created_at < NOW() - INTERVAL '30 minutes'
+                """),
+            )
+            total += result.rowcount
+
+            # Other work types (agents, orchestrations): 1 hour threshold
+            result = await session.execute(
+                text("""
+                    UPDATE work_items
+                    SET status = 'failed',
+                        completed_at = NOW(),
+                        metadata = COALESCE(metadata, '{}'::jsonb) || '{"auto_failed": "stale_cleanup"}'::jsonb
+                    WHERE status IN ('pending', 'running')
+                      AND kind != 'task'
+                      AND created_at < NOW() - INTERVAL '1 hour'
+                """),
+            )
+            total += result.rowcount
+
+            await session.commit()
+            return total
 
     # ── New Encapsulated Methods (used by admin.py) ──────────────
 

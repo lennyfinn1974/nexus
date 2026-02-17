@@ -125,6 +125,52 @@ async def api_health(request: Request):
         health_status["checks"]["filesystem"] = {"status": "unhealthy", "details": f"File system error: {e}"}
         health_status["healthy"] = False
 
+    # Redis / Clustering
+    cm = getattr(s, "cluster_manager", None)
+    if cm and cm.is_active:
+        try:
+            pong = await cm._redis.ping()
+            redis_info = {
+                "status": "healthy" if pong else "unhealthy",
+                "connected": bool(pong),
+                "agent_id": cm.agent_id,
+                "role": cm.registry.role if cm.registry else "unknown",
+            }
+            # Add working memory + memory index stats
+            if cm.working_memory:
+                try:
+                    redis_info["active_sessions"] = await cm.working_memory.count_active_sessions()
+                except Exception:
+                    redis_info["active_sessions"] = "error"
+            if cm.memory_index:
+                try:
+                    redis_info["indexed_memories"] = await cm.memory_index.count_memories()
+                except Exception:
+                    redis_info["indexed_memories"] = "error"
+            health_status["checks"]["redis"] = redis_info
+        except Exception as e:
+            health_status["checks"]["redis"] = {"status": "unhealthy", "connected": False, "details": str(e)}
+    else:
+        health_status["checks"]["redis"] = {
+            "status": "inactive",
+            "connected": False,
+            "details": "Clustering not enabled or Redis not connected",
+        }
+
+    # RAG Pipeline
+    rag = getattr(s, "rag_pipeline", None)
+    if rag and rag.is_active:
+        health_status["checks"]["rag"] = {
+            "status": "healthy",
+            "retrievals": rag._total_retrievals,
+            "ingests": rag._total_ingests,
+        }
+    else:
+        health_status["checks"]["rag"] = {
+            "status": "inactive",
+            "details": "RAG pipeline not active (requires Redis + embeddings)",
+        }
+
     # Memory
     try:
         import psutil

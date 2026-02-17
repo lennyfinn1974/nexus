@@ -29,6 +29,9 @@ STREAM_THROTTLE_SECS = 0.1  # Buffer chunks, flush every 100ms
 class AgentAttempt:
     """Execute a single LLM attempt including the tool loop."""
 
+    # Tools whose results should be captured for web memory ingestion
+    WEB_TOOLS = {"google_search", "web_fetch", "web_fetch_rendered"}
+
     def __init__(
         self,
         runner: AgentRunner,
@@ -45,6 +48,7 @@ class AgentAttempt:
         self.tools_for_api = tools_for_api
         self.ws_id = ws_id
         self.use_native_tools = bool(tools_for_api)
+        self.web_results: list[dict] = []  # Accumulated web tool results for memory
 
     async def execute(self) -> str:
         """Stream, parse tool calls, execute, loop. Returns final response text."""
@@ -63,9 +67,15 @@ class AgentAttempt:
                 and self.model_name == "ollama"
             )
 
+            # Only send stream_start/stream_end on the first round —
+            # subsequent rounds (tool-loop follow-ups) append to the same
+            # assistant bubble via stream_chunk instead of creating new ones.
+            is_first_round = (round_num == 0)
+
             try:
                 text, native_tool_calls = await self._stream_round(
                     suppress_tools=force_no_tools,
+                    send_stream_lifecycle=is_first_round,
                 )
             except AgentAbortError:
                 raise
@@ -78,6 +88,11 @@ class AgentAttempt:
             # If no tools were called, we have the final response
             if not tool_results:
                 final_response = text
+                # If this wasn't the first round, send stream_end now
+                if not is_first_round:
+                    await websocket_manager.send_to_client(
+                        self.ws_id, {"type": "stream_end", "model": self.model_name}
+                    )
                 break
 
             # Circuit breaker: if the same tool is being called repeatedly, stop
@@ -93,10 +108,16 @@ class AgentAttempt:
                 self.messages.extend(followup)
                 # One final round with NO tools to force a text answer
                 try:
-                    text, _ = await self._stream_round(suppress_tools=True)
+                    text, _ = await self._stream_round(
+                        suppress_tools=True, send_stream_lifecycle=False,
+                    )
                     final_response = text
                 except Exception:
                     final_response = text
+                # Send final stream_end
+                await websocket_manager.send_to_client(
+                    self.ws_id, {"type": "stream_end", "model": self.model_name}
+                )
                 break
 
             prev_tool_names = current_tool_names
@@ -104,6 +125,10 @@ class AgentAttempt:
             if round_num > MAX_TOOL_ROUNDS:
                 final_response = text
                 logger.warning(f"[{self.ws_id}] Hit max tool rounds ({MAX_TOOL_ROUNDS})")
+                # Send final stream_end
+                await websocket_manager.send_to_client(
+                    self.ws_id, {"type": "stream_end", "model": self.model_name}
+                )
                 break
 
             # Send tool completion as a non-visible event (not a system message)
@@ -130,11 +155,17 @@ class AgentAttempt:
 
     async def _stream_round(
         self, suppress_tools: bool = False,
+        send_stream_lifecycle: bool = True,
     ) -> tuple[str, list[dict]]:
         """Single streaming round. Returns (text, tool_calls).
 
         When *suppress_tools* is True, no tool definitions are sent —
         forcing the model to produce a text-only answer (synthesis).
+
+        When *send_stream_lifecycle* is False, stream_start/stream_end
+        are NOT sent — used for follow-up rounds in the tool loop so
+        the Chat UI appends to the existing assistant bubble instead
+        of creating a new one.
         """
         state = self.runner.state
         tools = None if suppress_tools else self.tools_for_api
@@ -147,9 +178,10 @@ class AgentAttempt:
         )
         self.model_name = model_name
 
-        await websocket_manager.send_to_client(
-            self.ws_id, {"type": "stream_start", "model": model_name}
-        )
+        if send_stream_lifecycle:
+            await websocket_manager.send_to_client(
+                self.ws_id, {"type": "stream_start", "model": model_name}
+            )
 
         full_response = ""
         native_tool_calls: list[dict] = []
@@ -163,9 +195,10 @@ class AgentAttempt:
                     await websocket_manager.send_to_client(
                         self.ws_id, {"type": "stream_chunk", "content": buffer}
                     )
-                await websocket_manager.send_to_client(
-                    self.ws_id, {"type": "stream_end", "model": model_name}
-                )
+                if send_stream_lifecycle:
+                    await websocket_manager.send_to_client(
+                        self.ws_id, {"type": "stream_end", "model": model_name}
+                    )
                 raise AgentAbortError("Request aborted by user")
 
             if isinstance(chunk, dict) and chunk.get("type") == "tool_use":
@@ -193,9 +226,10 @@ class AgentAttempt:
                 self.ws_id, {"type": "stream_chunk", "content": buffer}
             )
 
-        await websocket_manager.send_to_client(
-            self.ws_id, {"type": "stream_end", "model": model_name}
-        )
+        if send_stream_lifecycle:
+            await websocket_manager.send_to_client(
+                self.ws_id, {"type": "stream_end", "model": model_name}
+            )
 
         return full_response, native_tool_calls
 
@@ -240,6 +274,13 @@ class AgentAttempt:
                             "result": result.result,
                             "tool_use_id": tool_id,
                         })
+                        # Capture web tool results for memory ingestion
+                        if tool_name in self.WEB_TOOLS:
+                            self.web_results.append({
+                                "tool": tool_name,
+                                "query": tool_input,
+                                "result": result.result or "",
+                            })
                     else:
                         tool_results.append({
                             "tool": tool_name,

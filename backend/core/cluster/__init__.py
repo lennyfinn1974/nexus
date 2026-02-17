@@ -69,7 +69,7 @@ class ClusterManager:
         self.heartbeat_interval: int = int(config.get("CLUSTER_HEARTBEAT_INTERVAL", 2))
         self.failure_threshold: int = int(config.get("CLUSTER_FAILURE_THRESHOLD", 3))
         self.election_timeout: int = int(config.get("CLUSTER_ELECTION_TIMEOUT", 5))
-        self.min_secondaries: int = int(config.get("CLUSTER_MIN_SECONDARIES", 1))
+        self.min_secondaries: int = int(config.get("CLUSTER_MIN_SECONDARIES", 0))
 
         # Memory
         self.working_memory_ttl: int = int(config.get("CLUSTER_WORKING_MEMORY_TTL", 3600))

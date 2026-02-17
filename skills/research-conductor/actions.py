@@ -454,7 +454,7 @@ class AdvancedResearchConductor:
 research_conductor = AdvancedResearchConductor()
 
 # Action handlers for skills engine
-async def conduct_research(params: Dict[str, str], config_manager) -> str:
+async def conduct_research(params: Dict[str, str]) -> str:
     """Conduct comprehensive research on a topic"""
     topic = params.get("topic", "")
     depth = params.get("depth", "standard")
@@ -489,7 +489,7 @@ async def conduct_research(params: Dict[str, str], config_manager) -> str:
     
     return response
 
-async def analyze_credibility(params: Dict[str, str], config_manager) -> str:
+async def analyze_credibility(params: Dict[str, str]) -> str:
     """Analyze credibility of provided URLs"""
     urls_str = params.get("urls", "")
     
@@ -516,7 +516,7 @@ async def analyze_credibility(params: Dict[str, str], config_manager) -> str:
     
     return response
 
-async def fact_check(params: Dict[str, str], config_manager) -> str:
+async def fact_check(params: Dict[str, str]) -> str:
     """Fact-check a claim against authoritative sources"""
     claim = params.get("claim", "")
     thoroughness = params.get("thoroughness", "thorough")
@@ -556,10 +556,10 @@ async def fact_check(params: Dict[str, str], config_manager) -> str:
     return response
 
 # Placeholder for remaining actions
-async def synthesize_findings(params: Dict[str, str], config_manager) -> str:
+async def synthesize_findings(params: Dict[str, str]) -> str:
     """Synthesize research findings (placeholder)"""
     return "🔄 Synthesis feature coming soon in advanced version"
 
-async def monitor_topic(params: Dict[str, str], config_manager) -> str:
+async def monitor_topic(params: Dict[str, str]) -> str:
     """Monitor topic for changes (placeholder)"""  
     return "📡 Topic monitoring feature coming soon in advanced version"

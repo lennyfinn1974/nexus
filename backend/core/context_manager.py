@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Optional
 
 logger = logging.getLogger("nexus.context")
@@ -23,6 +24,10 @@ RECENT_WINDOW = 20
 SUMMARY_THRESHOLD = 30
 # How many new messages beyond the last summary before we regenerate
 SUMMARY_REFRESH_GAP = 20
+
+# Backoff: don't retry summary generation for this many seconds after a failure
+_SUMMARY_BACKOFF_SECONDS = 300  # 5 minutes
+_summary_fail_timestamps: dict[str, float] = {}  # conv_id → last failure time
 
 # Context window limits by model type (in tokens).
 # Ollama's 32K makes truncation and guards critical for local-first operation.
@@ -150,11 +155,19 @@ async def _maybe_refresh_summary(
     A summary is generated when:
     - Total messages >= SUMMARY_THRESHOLD (30) AND no summary exists
     - OR the gap between total messages and messages_covered exceeds SUMMARY_REFRESH_GAP
+    - AND no recent failure (5-minute backoff to avoid spamming Ollama)
 
     Runs as a background task — does NOT block the current response.
     """
     try:
         if total_count < SUMMARY_THRESHOLD:
+            return
+
+        # Backoff: if summary generation failed recently, don't retry yet.
+        # Without this, every message triggers a 30s Ollama call that times out
+        # and blocks the inference slot for real user queries.
+        last_fail = _summary_fail_timestamps.get(conv_id, 0)
+        if time.time() - last_fail < _SUMMARY_BACKOFF_SECONDS:
             return
 
         detail = await db.get_conversation_summary_detail(conv_id)
@@ -171,6 +184,13 @@ async def _maybe_refresh_summary(
                 needs_refresh = True
 
         if needs_refresh:
+            # Wait for the current user query to finish before using Ollama
+            # for summarization. Without this delay, the summary request competes
+            # with the user's chat inference on the same Ollama instance.
+            await asyncio.sleep(30)
+            # Re-check backoff in case another task already ran during the wait
+            if time.time() - _summary_fail_timestamps.get(conv_id, 0) < _SUMMARY_BACKOFF_SECONDS:
+                return
             await _generate_summary(db, conv_id, total_count, model_router)
 
     except Exception as e:
@@ -183,7 +203,12 @@ async def _generate_summary(
     total_count: int,
     model_router: Any,
 ) -> None:
-    """Generate a conversation summary from older messages."""
+    """Generate a conversation summary from older messages.
+
+    Uses a tight context budget (3K chars) and short timeout (10s) to avoid
+    blocking Ollama's inference slot. If this fails, backoff prevents retries
+    for 5 minutes so real user queries aren't competing with failed summaries.
+    """
     try:
         # Calculate how many older messages to summarise
         # (everything except the most recent RECENT_WINDOW)
@@ -198,41 +223,50 @@ async def _generate_summary(
         if not older_messages:
             return
 
-        # Build a concise conversation text (truncate individual messages to save tokens)
+        # Build a concise conversation text — keep TIGHT for Ollama's 32K context
+        # and to avoid slow inference. Take user messages only (they define topics)
+        # and truncate aggressively.
         conversation_parts = []
         for m in older_messages:
             content = m["content"]
-            if len(content) > 500:
-                content = content[:500] + "..."
-            role_label = "USER" if m["role"] == "user" else "ASSISTANT"
-            conversation_parts.append(f"{role_label}: {content}")
+            if m["role"] == "user":
+                if len(content) > 200:
+                    content = content[:200] + "..."
+                conversation_parts.append(f"USER: {content}")
+            else:
+                # For assistant, just take first sentence/line as topic indicator
+                first_line = content.split("\n")[0][:150]
+                conversation_parts.append(f"ASSISTANT: {first_line}")
 
         conversation_text = "\n".join(conversation_parts)
 
-        # Truncate total conversation text if extremely long
-        if len(conversation_text) > 8000:
-            conversation_text = conversation_text[:8000] + "\n...(truncated)"
+        # Hard cap at 3K chars — Ollama needs to handle this fast
+        if len(conversation_text) > 3000:
+            conversation_text = conversation_text[:3000] + "\n...(truncated)"
 
         summary_prompt = (
-            "Summarise the following conversation history concisely. "
-            "Capture the key topics discussed, any decisions made, important facts mentioned, "
-            "and the current state of each topic. Use bullet points. "
-            "Keep it under 300 words.\n\n"
-            f"CONVERSATION:\n{conversation_text}"
+            "Summarise this conversation concisely. Key topics, decisions, and facts only. "
+            "Bullet points. Under 200 words.\n\n"
+            f"{conversation_text}"
         )
 
         result = await model_router.chat(
             messages=[{"role": "user", "content": summary_prompt}],
-            system="You are a precise summariser. Extract key facts, topics, and decisions only. Be concise.",
-            force_model=None,  # Use default routing (cheapest available)
+            system="You are a precise summariser. Be very concise.",
+            force_model="ollama",
+            timeout=10,  # Short timeout — don't block Ollama for long
         )
 
         summary_text = result.get("content", "")
         if summary_text and len(summary_text) > 20:
             await db.save_conversation_summary(conv_id, summary_text, older_count)
+            # Clear any failure backoff on success
+            _summary_fail_timestamps.pop(conv_id, None)
             logger.info(f"Generated summary for {conv_id} covering {older_count} messages ({len(summary_text)} chars)")
         else:
+            _summary_fail_timestamps[conv_id] = time.time()
             logger.warning(f"Summary generation returned empty result for {conv_id}")
 
     except Exception as e:
+        _summary_fail_timestamps[conv_id] = time.time()
         logger.warning(f"Failed to generate conversation summary for {conv_id}: {e}")

@@ -33,6 +33,11 @@ SIMPLE_INDICATORS = [
     r"^(translate|summarize|summarise|tldr)\b",
     r"\b(remind|timer|alarm|schedule)\b",
     r"^.{0,80}$",
+    # Knowledge recall / memory questions — Ollama handles these fine
+    r"\b(what do you know|what did you learn|tell me about|recall|remember)\b",
+    r"\b(do you (know|remember)|have you (seen|heard))\b",
+    r"^(test|testing|check|verify)\b",
+    r"^let'?s\s+(test|try|check)\b",
 ]
 
 
@@ -50,7 +55,7 @@ class ModelRouter:
         ollama: OllamaClient | None,
         claude: ClaudeClient | None,
         claude_code: Any | None = None,
-        complexity_threshold: int = 60,
+        complexity_threshold: int = 70,
         timeout_seconds: int = 30,
     ):
         self.ollama = ollama
@@ -251,6 +256,7 @@ class ModelRouter:
         force_model: str | None = None,
         tools: list[dict] | None = None,
         fallback_tools: list[dict] | None = None,
+        timeout: int | None = None,
     ) -> dict:
         """Route a chat request with timeout handling and tool support.
 
@@ -262,23 +268,25 @@ class ModelRouter:
             fallback_tools: Tool definitions for the fallback model's format.
                 If not provided, tools are dropped on fallback to avoid
                 format incompatibility.
+            timeout: Override timeout in seconds (default: self.timeout_seconds).
         """
+        effective_timeout = timeout or self.timeout_seconds
         last_message = messages[-1]["content"] if messages else ""
         model_name = self.select_model(last_message, force_model)
         client = self._get_client(model_name)
 
-        logger.info(f"Routing to: {model_name} (timeout: {self.timeout_seconds}s)")
+        logger.info(f"Routing to: {model_name} (timeout: {effective_timeout}s)")
 
         async def _try(c: Any, name: str, t: list[dict] | None = None, msgs: list | None = None) -> dict:
             try:
                 result = await asyncio.wait_for(
                     c.chat(msgs or messages, system, tools=t),
-                    timeout=self.timeout_seconds,
+                    timeout=effective_timeout,
                 )
                 result["routed_to"] = name
                 return result
             except asyncio.TimeoutError:
-                logger.warning(f"{name} timed out after {self.timeout_seconds}s")
+                logger.warning(f"{name} timed out after {effective_timeout}s")
                 raise TimeoutError(f"Model {name} timed out")
             except Exception as e:
                 logger.warning(f"{name} failed: {e}")

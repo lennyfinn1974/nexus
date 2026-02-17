@@ -1,0 +1,21 @@
+author: user
+description: Comprehensive overview of Redis's vector search capabilities including
+  Vector Sets, FT.HYBRID command, quantization, LangCache, and agent framework integrations
+  as of late 2025.
+domain: AI/ML Infrastructure & Databases
+id: skill-71129b27
+name: Redis Vector Search
+triggers:
+  keywords:
+  - Redis
+  - vector search
+  - vector database
+  - HNSW
+  - hybrid search
+  - FT.HYBRID
+  - Vector Set
+  - semantic caching
+  - LangCache
+  - RAG
+type: knowledge
+version: '1.0'

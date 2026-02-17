@@ -503,44 +503,65 @@ async def _handle_user_message(
 
     # Run the agent
     runner = AgentRunner(s, ws_id, conv_id, text, force_model)
-    final_response = await runner.run()
+    final_response = ""
+    try:
+        final_response = await runner.run()
+        await s.db.add_message(conv_id, "assistant", final_response, model_used="agent")
+    except Exception as e:
+        # Even on error, capture any partial response for memory hooks
+        final_response = getattr(runner, "_last_response", "") or ""
+        logger.warning(f"Agent run failed (memory hooks will still fire): {e}")
+        raise
+    finally:
+        # ── Post-response hooks (always run, even on error) ──
 
-    await s.db.add_message(conv_id, "assistant", final_response, model_used="agent")
+        # Cluster: update session + release work
+        if cm and cm.is_active:
+            try:
+                new_count = await s.db.get_message_count(conv_id)
+                await cm.working_memory.update_session(conv_id, {
+                    "message_count": new_count,
+                    "last_model": getattr(runner, "_last_model", "unknown"),
+                    "last_response_len": len(final_response),
+                })
+                await cm.working_memory.release_work(conv_id)
+            except Exception as e2:
+                logger.debug(f"Cluster session update failed (non-blocking): {e2}")
 
-    # ── Cluster: update session with response metadata + release work ──
-    if cm and cm.is_active:
-        try:
-            new_count = await s.db.get_message_count(conv_id)
-            await cm.working_memory.update_session(conv_id, {
-                "message_count": new_count,
-                "last_model": getattr(runner, "_last_model", "unknown"),
-                "last_response_len": len(final_response),
-            })
-            await cm.working_memory.release_work(conv_id)
-        except Exception as e:
-            logger.debug(f"Cluster session update failed (non-blocking): {e}")
+        # Only run memory hooks if we have a meaningful response
+        if final_response and len(final_response) > 20:
+            # Passive memory extraction
+            passive_mem = getattr(s, "passive_memory", None)
+            if passive_mem:
+                asyncio.create_task(
+                    _extract_passive_memory(passive_mem, conv_id, text, final_response)
+                )
 
-    # Passive memory extraction — runs in background, never blocks response
-    passive_mem = getattr(s, "passive_memory", None)
-    if passive_mem:
-        asyncio.create_task(
-            _extract_passive_memory(passive_mem, conv_id, text, final_response)
-        )
+            # RAG ingest — store conversation turn for future retrieval
+            rag_pipeline = getattr(s, "rag_pipeline", None)
+            auto_ingest = s.cfg.get_bool("RAG_AUTO_INGEST", True) if s.cfg else True
+            if rag_pipeline and rag_pipeline.is_active and auto_ingest:
+                asyncio.create_task(
+                    _rag_ingest(rag_pipeline, conv_id, text, final_response)
+                )
 
-    # RAG ingest — store conversation turn for future retrieval
-    rag_pipeline = getattr(s, "rag_pipeline", None)
-    auto_ingest = s.cfg.get_bool("RAG_AUTO_INGEST", True) if s.cfg else True
-    if rag_pipeline and rag_pipeline.is_active and auto_ingest:
-        asyncio.create_task(
-            _rag_ingest(rag_pipeline, conv_id, text, final_response)
-        )
+            # Knowledge Graph extraction
+            knowledge_graph = getattr(s, "knowledge_graph", None)
+            if knowledge_graph:
+                asyncio.create_task(
+                    _kg_extract(knowledge_graph, conv_id, text, final_response)
+                )
 
-    # Knowledge Graph extraction — extract entities + relationships
-    knowledge_graph = getattr(s, "knowledge_graph", None)
-    if knowledge_graph:
-        asyncio.create_task(
-            _kg_extract(knowledge_graph, conv_id, text, final_response)
-        )
+            # Web content memory — ingest key facts from web searches
+            if rag_pipeline and rag_pipeline.is_active:
+                attempt = getattr(runner, "_attempt", None)
+                web_results = getattr(attempt, "web_results", []) if attempt else []
+                if web_results:
+                    asyncio.create_task(
+                        _web_memory_ingest(rag_pipeline, conv_id, text, web_results)
+                    )
+        else:
+            logger.info(f"Memory hooks skipped: response too short ({len(final_response)} chars)")
 
     return runner
 
@@ -551,9 +572,9 @@ async def _extract_passive_memory(extractor, conv_id: str, user_msg: str, assist
         learned = await extractor.extract_and_store(conv_id, user_msg, assistant_msg)
         total = sum(len(v) for v in learned.values())
         if total > 0:
-            logger.debug(f"Passive memory: learned {total} items from {conv_id}")
+            logger.info(f"Passive memory: learned {total} items from {conv_id[:8]}")
     except Exception as e:
-        logger.debug(f"Passive memory extraction failed: {e}")
+        logger.warning(f"Passive memory extraction failed: {e}")
 
 
 async def _rag_ingest(rag_pipeline, conv_id: str, user_msg: str, assistant_msg: str):
@@ -565,9 +586,25 @@ async def _rag_ingest(rag_pipeline, conv_id: str, user_msg: str, assistant_msg: 
             assistant_response=assistant_msg,
         )
         if memory_id:
-            logger.debug(f"RAG ingested: {memory_id} from {conv_id[:8]}")
+            logger.info(f"RAG ingested: {memory_id} from {conv_id[:8]}")
+        else:
+            logger.info(f"RAG ingest skipped for {conv_id[:8]} (too short or command)")
     except Exception as e:
-        logger.debug(f"RAG ingest failed: {e}")
+        logger.warning(f"RAG ingest failed: {e}", exc_info=True)
+
+
+async def _web_memory_ingest(rag_pipeline, conv_id: str, user_msg: str, web_results: list):
+    """Background task: ingest condensed web search results into RAG memory."""
+    try:
+        memory_id = await rag_pipeline.ingest_web_content(
+            user_query=user_msg,
+            web_results=web_results,
+            conv_id=conv_id,
+        )
+        if memory_id:
+            logger.info(f"Web memory ingested: {memory_id} ({len(web_results)} web results from {conv_id[:8]})")
+    except Exception as e:
+        logger.warning(f"Web memory ingest failed: {e}", exc_info=True)
 
 
 async def _kg_extract(knowledge_graph, conv_id: str, user_msg: str, assistant_msg: str):
@@ -581,9 +618,9 @@ async def _kg_extract(knowledge_graph, conv_id: str, user_msg: str, assistant_ms
         entity_count = len(result.get("entities", []))
         rel_count = len(result.get("relationships", []))
         if entity_count > 0:
-            logger.debug(
+            logger.info(
                 f"KG extracted: {entity_count} entities, {rel_count} relationships "
                 f"from {conv_id[:8]}"
             )
     except Exception as e:
-        logger.debug(f"KG extraction failed: {e}")
+        logger.warning(f"KG extraction failed: {e}", exc_info=True)

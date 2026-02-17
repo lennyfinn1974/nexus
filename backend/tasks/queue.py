@@ -188,6 +188,7 @@ class TaskQueue:
                 priority=priority,
                 conv_id=conv_id,
                 user_id=user_id,
+                task_id=task_id,
             )
             logger.info(f"Submitted task {task_id} → stream (distributed, stream_id={stream_task_id})")
         else:

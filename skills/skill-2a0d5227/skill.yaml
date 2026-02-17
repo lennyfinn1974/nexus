@@ -1,0 +1,21 @@
+author: user
+description: Comprehensive overview of Redis vector search capabilities including
+  Vector Sets, FT.HYBRID, SVS-VAMANA quantization, LangCache, and the Redis 8.x evolution
+  through late 2025.
+domain: databases/ai-infrastructure
+id: skill-2a0d5227
+name: Redis Vector Search Developments
+triggers:
+  keywords:
+  - Redis
+  - vector search
+  - Vector Sets
+  - HNSW
+  - SVS-VAMANA
+  - FT.HYBRID
+  - hybrid search
+  - LangCache
+  - semantic caching
+  - RAG
+type: knowledge
+version: '1.0'

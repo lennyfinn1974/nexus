@@ -755,6 +755,33 @@ async def get_workstream(item_id: str):
     return JSONResponse({"item": item, "children": children})
 
 
+@router.post("/workstreams/cleanup")
+async def cleanup_workstreams(days: int = 7):
+    """Archive/delete terminal work items older than N days and fix stale items."""
+    if not _db:
+        return JSONResponse({"error": "Database not available"}, status_code=500)
+    try:
+        stale_fixed = await _db.fix_stale_work_items()
+        old_deleted = await _db.cleanup_old_work_items(days=days)
+
+        # Also evict stale items from the in-memory registry
+        if _work_registry:
+            evicted = 0
+            for item_id, item in list(_work_registry._items.items()):
+                if item.get("status") in ("completed", "failed", "cancelled"):
+                    del _work_registry._items[item_id]
+                    evicted += 1
+
+        return JSONResponse({
+            "stale_fixed": stale_fixed,
+            "old_deleted": old_deleted,
+            "cache_evicted": evicted if _work_registry else 0,
+            "message": f"Fixed {stale_fixed} stale items, deleted {old_deleted} items older than {days} days",
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # ── Cluster Management ──────────────────────────────────────────
 
 

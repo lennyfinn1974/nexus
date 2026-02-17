@@ -1,0 +1,21 @@
+author: user
+description: Comparison of KREA AI's prompt-to-workflow (creative media node pipelines)
+  versus Claude Code (full-stack software generation) for building a Nexus system
+  dashboard.
+domain: AI Tools / Creative AI / Software Development
+id: skill-89cf63b1
+name: KREA Prompt-to-Workflow vs Claude Code for Nexus Dashboard
+triggers:
+  keywords:
+  - KREA AI
+  - prompt-to-workflow
+  - Claude Code
+  - node workflow
+  - dashboard building
+  - Nexus
+  - no-code
+  - visual workflow
+  - full-stack development
+  - AI-assisted coding
+type: knowledge
+version: '1.0'

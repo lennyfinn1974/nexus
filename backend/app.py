@@ -111,16 +111,101 @@ class AppState:
 
 async def _handle_research_task(payload: dict, state: AppState) -> str:
     topic = payload.get("topic", "")
+    if not topic:
+        raise ValueError("Research topic cannot be empty")
     logger.info(f"Researching: {topic}")
     prompt = state.skills_engine.get_research_prompt(topic)
-    result = await state.model_router.chat(
-        messages=[{"role": "user", "content": prompt}],
-        system="You are a thorough research analyst. Provide well-structured, accurate information.",
-        force_model="claude",
+
+    try:
+        # Research tasks need a longer timeout — Claude Code does multi-step web research
+        result = await state.model_router.chat(
+            messages=[{"role": "user", "content": prompt}],
+            system="You are a thorough research analyst. Provide well-structured, accurate information.",
+            timeout=240,
+        )
+        content = result.get("content", "")
+        if not content:
+            raise RuntimeError(f"Model returned empty response for research on: {topic}")
+        parsed = state.skills_engine.parse_research_output(content)
+        if not parsed.get("overview") and not parsed.get("concepts"):
+            # Model didn't follow XML format — use raw content as overview
+            logger.warning(f"Research output not in expected XML format, using raw content")
+            parsed["overview"] = content[:3000]
+            parsed["name"] = topic[:60]
+            parsed["domain"] = "research"
+            parsed["description"] = f"Research on: {topic}"
+        skill = await state.skills_engine.create_knowledge_skill(**parsed)
+        result_msg = f"Created skill: {skill['name']} ({skill['id']})"
+
+        # Ingest skill knowledge into RAG for semantic retrieval
+        rag_pipeline = getattr(state, "rag_pipeline", None)
+        if rag_pipeline and rag_pipeline.is_active:
+            try:
+                concepts = parsed.get("concepts", [])
+                # Guard: if concepts is a string (not a list), split on newlines
+                if isinstance(concepts, str):
+                    concepts = [c.strip() for c in concepts.split("\n") if c.strip()]
+                knowledge_content = parsed.get("overview", "") + "\n\n" + "\n".join(
+                    f"- {c}" for c in concepts
+                )
+                if knowledge_content.strip():
+                    ids = await rag_pipeline.ingest_skill_knowledge(
+                        skill_id=skill["id"],
+                        skill_name=skill["name"],
+                        content=knowledge_content,
+                    )
+                    logger.info(f"RAG indexed skill knowledge: {skill['name']} ({len(ids)} chunks)")
+            except Exception as e:
+                logger.warning(f"RAG skill ingest failed for {skill['name']}: {e}")
+
+        # Notify connected Chat UI clients
+        from websocket_manager import websocket_manager
+        await websocket_manager.broadcast({
+            "type": "system",
+            "content": (
+                f"✅ **Research complete:** {topic}\n\n"
+                f"Created knowledge skill **{skill['name']}** (`{skill['id']}`). "
+                f"This knowledge is now available for future conversations."
+            ),
+        })
+        return result_msg
+
+    except Exception as e:
+        # Notify Chat UI of failure too
+        try:
+            from websocket_manager import websocket_manager
+            await websocket_manager.broadcast({
+                "type": "system",
+                "content": f"❌ **Research failed:** {topic}\n\nError: {e}",
+            })
+        except Exception:
+            pass
+        raise
+
+
+async def _handle_cleanup_task(payload: dict, state: AppState) -> str:
+    """Periodic task: clean up stale and old work items from KanBan + prune RAG memories."""
+    days = payload.get("days", 7)
+    stale_fixed = await state.db.fix_stale_work_items()
+    old_deleted = await state.db.cleanup_old_work_items(days=days)
+
+    # Prune stale RAG memories (web_content > 30d, conversation > 14d, 0 access)
+    rag_pruned = 0
+    rag_pipeline = getattr(state, "rag_pipeline", None)
+    if rag_pipeline and rag_pipeline.is_active:
+        try:
+            rag_pruned = await rag_pipeline.prune_old_memories()
+        except Exception as e:
+            logger.warning(f"RAG pruning failed during cleanup: {e}")
+
+    msg = (
+        f"Cleanup: {stale_fixed} stale work items fixed, "
+        f"{old_deleted} old items deleted, "
+        f"{rag_pruned} stale memories pruned"
     )
-    parsed = state.skills_engine.parse_research_output(result["content"])
-    skill = await state.skills_engine.create_knowledge_skill(**parsed)
-    return f"Created skill: {skill['name']} ({skill['id']})"
+    if stale_fixed > 0 or old_deleted > 0 or rag_pruned > 0:
+        logger.info(msg)
+    return msg
 
 
 async def _handle_ingest_task(payload: dict, state: AppState) -> str:
@@ -250,6 +335,16 @@ async def lifespan(app: FastAPI):
     await state.db.ensure_work_items_table()
     logger.info("Database connected")
 
+    # Personal Memory System — knowledge associations, preferences, patterns, goals
+    try:
+        from storage.memory_system import PersonalMemorySystem
+        state.db.memory_system = PersonalMemorySystem(session_factory)
+        await state.db.memory_system.initialize()
+        logger.info("Personal memory system initialized")
+    except Exception as e:
+        state.db.memory_system = None
+        logger.warning(f"Personal memory system failed to initialize: {e}")
+
     # Work Registry (unified work item tracking)
     from core.work_registry import work_registry
     from websocket_manager import websocket_manager
@@ -332,7 +427,10 @@ async def lifespan(app: FastAPI):
             logger.error(f"Clustering failed: {e} — running in single-agent mode")
             state.cluster_manager = None
     else:
-        logger.info("Clustering disabled (CLUSTER_ENABLED=false)")
+        logger.warning(
+            "Clustering disabled (CLUSTER_ENABLED=false) — "
+            "RAG vector search, working memory, and task distribution unavailable"
+        )
 
     # Skills
     state.skills_engine = SkillsEngine(state.cfg.skills_dir, state.db, config_manager=state.cfg)
@@ -356,6 +454,7 @@ async def lifespan(app: FastAPI):
     state.task_queue = TaskQueue(state.db, state.cfg.max_research_tasks)
     state.task_queue.register_handler("research", lambda p: _handle_research_task(p, state))
     state.task_queue.register_handler("ingest", lambda p: _handle_ingest_task(p, state))
+    state.task_queue.register_handler("cleanup", lambda p: _handle_cleanup_task(p, state))
 
     # Connect task queue to distributed stream if clustering is active
     if state.cluster_manager and state.cluster_manager.task_stream:
@@ -370,7 +469,22 @@ async def lifespan(app: FastAPI):
         payload={"topic": "self-improvement review", "auto": True},
         enabled=False,  # Enable via admin when ready
     )
+    state.task_queue.register_periodic(
+        name="kanban_cleanup",
+        task_type="cleanup",
+        interval_seconds=6 * 60 * 60,  # Every 6 hours
+        payload={"days": 7},
+        enabled=True,
+    )
     state.task_queue.start_scheduler()
+
+    # Fix any stale work items left from previous runs
+    try:
+        stale_count = await state.db.fix_stale_work_items()
+        if stale_count > 0:
+            logger.info(f"Startup cleanup: fixed {stale_count} stale work items")
+    except Exception as e:
+        logger.warning(f"Startup stale cleanup failed: {e}")
 
     # Plugins
     state.plugin_manager = PluginManager(state.cfg, state.db, state.model_router)
@@ -538,8 +652,14 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             state.rag_pipeline = None
             logger.warning(f"RAG pipeline failed to initialize: {e}")
+    elif rag_enabled and state.embedding_service:
+        logger.warning(
+            "RAG pipeline: Redis/clustering not active — "
+            "embeddings available but vector search disabled. "
+            "Check Redis connection (REDIS_URL) and CLUSTER_ENABLED setting."
+        )
     elif rag_enabled:
-        logger.info("RAG pipeline: waiting for clustering + embeddings (will activate when both ready)")
+        logger.warning("RAG pipeline: embedding service unavailable — RAG disabled")
     else:
         logger.info("RAG pipeline disabled (RAG_ENABLED=false)")
 

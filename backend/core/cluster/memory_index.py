@@ -1,7 +1,7 @@
-"""Memory Index — RediSearch vector index for semantic memory across agents.
+"""Memory Index — vector index for semantic memory across agents.
 
 Provides semantic search over memories using HNSW vector index:
-    - Store memories with embeddings as Redis Hashes
+    - Store memories with embeddings as Redis Hashes + Vector Sets
     - Search by vector similarity (cosine distance)
     - Three-stage deduplication (ID, hash, semantic)
     - Cross-agent memory sharing
@@ -12,11 +12,10 @@ Memory storage format:
         content_hash, created_at, access_count, last_accessed
     }
 
-Index:
-    nexus:mem_idx → RediSearch HNSW index on embedding field
-
-Requires RediSearch module (included in Redis Stack / Redis 8).
-Gracefully degrades to hash-only storage if RediSearch is unavailable.
+Search backends (auto-detected in priority order):
+    1. Redis 8 VADD/VSIM (native vectorset module — fastest)
+    2. RediSearch FT.CREATE/FT.SEARCH (Redis Stack — legacy)
+    3. Brute-force SCAN + cosine similarity (fallback — slowest)
 """
 
 from __future__ import annotations
@@ -39,6 +38,7 @@ SIMILARITY_THRESHOLD = 0.12  # Cosine distance below this = duplicate
 MAX_SEARCH_RESULTS = 20
 MEMORY_PREFIX = "mem"
 INDEX_NAME_SUFFIX = "mem_idx"
+VECTORSET_NAME_SUFFIX = "mem_vecs"
 
 
 def _float_vector_to_bytes(vector: list[float]) -> bytes:
@@ -58,7 +58,12 @@ def _content_hash(text: str) -> str:
 
 
 class MemoryIndex:
-    """RediSearch-backed semantic memory index.
+    """Semantic memory index with auto-detected backend.
+
+    Tries (in order):
+        1. Redis 8 VADD/VSIM — native HNSW vectorset (sub-ms search)
+        2. RediSearch FT.SEARCH — separate module (legacy Redis Stack)
+        3. Brute-force scan — SCAN all hashes + cosine similarity
 
     Usage:
         idx = MemoryIndex(redis, prefix="nexus:", agent_id="nexus-01")
@@ -67,7 +72,7 @@ class MemoryIndex:
         # Store a memory
         mem_id = await idx.store(
             text="User prefers dark mode and vim keybindings",
-            embedding=[0.1, 0.2, ...],  # 1536-dim vector
+            embedding=[0.1, 0.2, ...],  # 768-dim vector
             memory_type="preference",
             source_conv="conv-123",
         )
@@ -82,6 +87,11 @@ class MemoryIndex:
         await idx.stop()
     """
 
+    # Search backend modes
+    BACKEND_VSIM = "vsim"         # Redis 8 native vectorset
+    BACKEND_REDISEARCH = "redisearch"  # FT.CREATE / FT.SEARCH
+    BACKEND_SCAN = "scan"         # Brute-force fallback
+
     def __init__(
         self,
         redis,
@@ -95,7 +105,9 @@ class MemoryIndex:
         self.vector_dims = vector_dims
 
         self._index_name = f"{prefix}{INDEX_NAME_SUFFIX}"
-        self._index_available = False
+        self._vectorset_key = f"{prefix}{VECTORSET_NAME_SUFFIX}"
+        self._backend = self.BACKEND_SCAN  # Default to worst case
+        self._index_available = False  # Legacy compat flag
 
         # Stats
         self._stored = 0
@@ -117,45 +129,140 @@ class MemoryIndex:
     # ── Lifecycle ────────────────────────────────────────────────
 
     async def start(self) -> None:
-        """Create the RediSearch index if it doesn't exist."""
-        try:
-            await self._create_index()
-            self._index_available = True
-            logger.info(
-                f"Memory index started: dims={self.vector_dims} "
-                f"index={self._index_name}"
-            )
-        except Exception as e:
-            if "unknown command" in str(e).lower() or "module" in str(e).lower():
-                logger.warning(
-                    "RediSearch not available — falling back to hash-only storage. "
-                    "Install Redis Stack for semantic search."
-                )
-                self._index_available = False
-            else:
-                # Index might already exist
-                if "Index already exists" in str(e):
-                    self._index_available = True
-                    logger.info(f"Memory index already exists: {self._index_name}")
-                else:
-                    logger.warning(f"Error creating memory index: {e}")
-                    self._index_available = False
+        """Detect best available search backend and initialize."""
+        # Try Redis 8 VADD/VSIM first (fastest)
+        if await self._try_vsim_backend():
+            return
 
-    async def stop(self) -> None:
-        """Cleanup (index persists in Redis)."""
-        logger.info(
-            f"Memory index stopped: stored={self._stored} "
-            f"searched={self._searched} duplicates={self._duplicates_found}"
+        # Try RediSearch FT.CREATE (legacy Redis Stack)
+        if await self._try_redisearch_backend():
+            return
+
+        # Fallback to brute-force scan
+        self._backend = self.BACKEND_SCAN
+        self._index_available = False
+        logger.warning(
+            "No vector search backend available — using brute-force scan. "
+            "For best performance, use Redis 8+ (has native VADD/VSIM)."
         )
 
-    async def _create_index(self) -> None:
-        """Create the RediSearch HNSW vector index.
+    async def _try_vsim_backend(self) -> bool:
+        """Try to use Redis 8's native VADD/VSIM vectorset."""
+        try:
+            # Probe: create a tiny test vectorset and remove it
+            test_key = f"{self._prefix}_vsim_probe"
+            await self._redis.execute_command(
+                "VADD", test_key, "VALUES", "3", "1.0", "0.0", "0.0", "__probe__"
+            )
+            await self._redis.delete(test_key)
 
-        Uses FT.CREATE with VECTOR field type for HNSW similarity search.
+            self._backend = self.BACKEND_VSIM
+            self._index_available = True
+
+            # Ensure the vectorset exists (VADD creates it on first use)
+            # Migrate any existing hash-only memories into the vectorset
+            migrated = await self._migrate_hashes_to_vectorset()
+
+            logger.info(
+                f"Memory index started: backend=VSIM (Redis 8 native) "
+                f"dims={self.vector_dims} key={self._vectorset_key}"
+                + (f" migrated={migrated}" if migrated > 0 else "")
+            )
+            return True
+
+        except Exception as e:
+            err_str = str(e).lower()
+            if "unknown command" in err_str or "err wrong" in err_str:
+                logger.debug(f"VSIM not available: {e}")
+            else:
+                logger.debug(f"VSIM probe failed: {e}")
+            return False
+
+    async def _try_redisearch_backend(self) -> bool:
+        """Try to use RediSearch FT.CREATE/FT.SEARCH."""
+        try:
+            await self._create_ft_index()
+            self._backend = self.BACKEND_REDISEARCH
+            self._index_available = True
+            logger.info(
+                f"Memory index started: backend=RediSearch "
+                f"dims={self.vector_dims} index={self._index_name}"
+            )
+            return True
+
+        except Exception as e:
+            err_str = str(e).lower()
+            if "unknown command" in err_str or "module" in err_str:
+                return False
+            elif "index already exists" in err_str:
+                self._backend = self.BACKEND_REDISEARCH
+                self._index_available = True
+                logger.info(f"Memory index already exists: {self._index_name}")
+                return True
+            else:
+                logger.debug(f"RediSearch probe failed: {e}")
+                return False
+
+    async def _migrate_hashes_to_vectorset(self) -> int:
+        """Migrate existing hash-stored memories into the VADD vectorset.
+
+        Only runs once — checks if vectorset has fewer items than hash store.
+        Non-blocking: skips items that fail.
         """
-        # Build the FT.CREATE command manually
-        # Schema: text TEXT, memory_type TAG, source_agent TAG,
-        #         source_conv TAG, embedding VECTOR HNSW
+        try:
+            # Count existing hash memories
+            hash_count = 0
+            pattern = self._mem_pattern()
+            async for _ in self._redis.scan_iter(match=pattern, count=100):
+                hash_count += 1
+
+            if hash_count == 0:
+                return 0
+
+            # Check vectorset size (VCARD returns cardinality)
+            try:
+                vs_count = await self._redis.execute_command("VCARD", self._vectorset_key)
+                vs_count = int(vs_count or 0)
+            except Exception:
+                vs_count = 0
+
+            if vs_count >= hash_count:
+                return 0  # Already migrated
+
+            # Migrate missing memories
+            migrated = 0
+            async for key in self._redis.scan_iter(match=pattern, count=100):
+                try:
+                    data = await self._redis.hmget(key, "id", "embedding")
+                    mem_id = data[0]
+                    emb_data = data[1]
+                    if not mem_id or not emb_data:
+                        continue
+
+                    if isinstance(mem_id, bytes):
+                        mem_id = mem_id.decode("utf-8")
+                    if isinstance(emb_data, str):
+                        emb_data = emb_data.encode("latin-1")
+
+                    vec = _bytes_to_float_vector(emb_data)
+                    # VADD with FP32 format: VADD key FP32 <blob> element
+                    blob = _float_vector_to_bytes(vec)
+                    await self._redis.execute_command(
+                        "VADD", self._vectorset_key, "FP32", blob, mem_id
+                    )
+                    migrated += 1
+                except Exception as e:
+                    logger.debug(f"Migration skip for {key}: {e}")
+                    continue
+
+            return migrated
+
+        except Exception as e:
+            logger.warning(f"Migration error (non-fatal): {e}")
+            return 0
+
+    async def _create_ft_index(self) -> None:
+        """Create the RediSearch HNSW vector index (legacy backend)."""
         cmd = [
             "FT.CREATE", self._index_name,
             "ON", "HASH",
@@ -172,9 +279,15 @@ class MemoryIndex:
             "DIM", str(self.vector_dims),
             "DISTANCE_METRIC", "COSINE",
         ]
-
         await self._redis.execute_command(*cmd)
-        logger.info(f"Created RediSearch index: {self._index_name}")
+
+    async def stop(self) -> None:
+        """Cleanup (index persists in Redis)."""
+        logger.info(
+            f"Memory index stopped: backend={self._backend} "
+            f"stored={self._stored} searched={self._searched} "
+            f"duplicates={self._duplicates_found}"
+        )
 
     # ── Store ────────────────────────────────────────────────────
 
@@ -192,7 +305,7 @@ class MemoryIndex:
         Performs three-stage deduplication:
             1. ID check (if memory_id provided)
             2. Content hash check (exact text match)
-            3. Semantic similarity check (if RediSearch available)
+            3. Semantic similarity check (if index available)
 
         Args:
             text: The memory text content
@@ -216,7 +329,6 @@ class MemoryIndex:
         if memory_id:
             existing = await self._redis.exists(self._mem_key(memory_id))
             if existing:
-                # Update access count instead of creating duplicate
                 await self._touch_memory(memory_id)
                 self._duplicates_found += 1
                 return None
@@ -225,16 +337,14 @@ class MemoryIndex:
         c_hash = _content_hash(text)
         existing_id = await self._redis.zscore(self._hash_index_key(), c_hash)
         if existing_id is not None:
-            # Exact content match exists
             self._duplicates_found += 1
             logger.debug(f"Duplicate content hash: {c_hash[:8]}...")
             return None
 
-        # Stage 3: Semantic dedup (if index available)
-        if self._index_available:
+        # Stage 3: Semantic dedup (if search backend available)
+        if self._backend != self.BACKEND_SCAN:
             similar = await self.search(embedding, limit=1)
             if similar and similar[0]["score"] < SIMILARITY_THRESHOLD:
-                # Too similar to existing memory
                 self._duplicates_found += 1
                 logger.debug(
                     f"Semantic duplicate found: score={similar[0]['score']:.4f} "
@@ -267,10 +377,28 @@ class MemoryIndex:
         # Register content hash
         await self._redis.zadd(self._hash_index_key(), {c_hash: now})
 
+        # Add to vectorset (VSIM backend)
+        if self._backend == self.BACKEND_VSIM:
+            try:
+                blob = _float_vector_to_bytes(embedding)
+                # VADD key FP32 <blob> element [SETATTR json]
+                attrs = json.dumps({
+                    "memory_type": memory_type,
+                    "source_conv": source_conv,
+                    "created_at": now,
+                })
+                await self._redis.execute_command(
+                    "VADD", self._vectorset_key,
+                    "FP32", blob, memory_id,
+                    "SETATTR", attrs,
+                )
+            except Exception as e:
+                logger.warning(f"VADD failed for {memory_id} (hash still stored): {e}")
+
         self._stored += 1
         logger.debug(
             f"Memory stored: id={memory_id} type={memory_type} "
-            f"hash={c_hash[:8]}..."
+            f"backend={self._backend} hash={c_hash[:8]}..."
         )
 
         return memory_id
@@ -294,6 +422,8 @@ class MemoryIndex:
     ) -> list[dict[str, Any]]:
         """Semantic search over stored memories.
 
+        Uses the best available backend (VSIM > RediSearch > scan).
+
         Args:
             query_embedding: Query vector (same dimensions as stored)
             limit: Maximum results to return
@@ -304,56 +434,149 @@ class MemoryIndex:
             List of {id, text, score, memory_type, source_agent, ...} dicts
             sorted by similarity (lowest distance = most similar).
         """
-        if not self._index_available:
-            logger.debug("Index unavailable, falling back to scan search")
+        if self._backend == self.BACKEND_VSIM:
+            return await self._vsim_search(query_embedding, limit, memory_type)
+        elif self._backend == self.BACKEND_REDISEARCH:
+            try:
+                return await self._ft_search(query_embedding, limit, memory_type, source_conv)
+            except Exception as e:
+                logger.warning(f"FT.SEARCH error, falling back to scan: {e}")
+                return await self._scan_search(query_embedding, limit)
+        else:
             return await self._scan_search(query_embedding, limit)
 
+    async def _vsim_search(
+        self,
+        query_embedding: list[float],
+        limit: int = 5,
+        memory_type: str = None,
+    ) -> list[dict[str, Any]]:
+        """Search using Redis 8 VSIM (native HNSW, sub-ms)."""
         try:
-            # Build FT.SEARCH query with KNN
-            query_blob = _float_vector_to_bytes(query_embedding)
+            blob = _float_vector_to_bytes(query_embedding)
 
-            # Build filter
-            filters = "*"
+            # Build VSIM command
+            cmd = [
+                "VSIM", self._vectorset_key,
+                "FP32", blob,
+                "WITHSCORES",
+                "COUNT", str(limit),  # Caller (RAG pipeline) already accounts for filtering headroom
+            ]
+
+            # Add FILTER for memory_type if specified
             if memory_type:
-                filters = f"@memory_type:{{{memory_type}}}"
-            if source_conv:
-                conv_filter = f"@source_conv:{{{source_conv}}}"
-                if filters == "*":
-                    filters = conv_filter
-                else:
-                    filters = f"({filters} {conv_filter})"
+                cmd.extend(["FILTER", f".memory_type == '{memory_type}'"])
 
-            # FT.SEARCH with KNN
-            # Syntax: FT.SEARCH idx "@field:[VECTOR_RANGE $N @embedding $BLOB]"
-            # or: FT.SEARCH idx "*=>[KNN $K @embedding $BLOB AS score]"
-            query = f"{filters}=>[KNN {limit} @embedding $query_vec AS score]"
-
-            results = await self._redis.execute_command(
-                "FT.SEARCH", self._index_name,
-                query,
-                "PARAMS", "2", "query_vec", query_blob,
-                "SORTBY", "score",
-                "LIMIT", "0", str(limit),
-                "RETURN", "7",
-                "id", "text", "score", "memory_type",
-                "source_agent", "source_conv", "access_count",
-                "DIALECT", "2",
-            )
-
+            raw = await self._redis.execute_command(*cmd)
             self._searched += 1
-            return self._parse_search_results(results)
+
+            # Parse VSIM results: [element1, score1, element2, score2, ...]
+            results = []
+            if not raw:
+                return results
+
+            i = 0
+            while i < len(raw) - 1:
+                mem_id = raw[i]
+                score = raw[i + 1]
+                i += 2
+
+                if isinstance(mem_id, bytes):
+                    mem_id = mem_id.decode("utf-8")
+                if isinstance(score, bytes):
+                    score = float(score.decode("utf-8"))
+                elif isinstance(score, (int, float)):
+                    score = float(score)
+
+                # VSIM returns cosine similarity (1.0 = identical)
+                # Convert to cosine distance for compatibility (lower = better)
+                distance = 1.0 - score
+
+                # Fetch metadata from the hash
+                hash_key = self._mem_key(mem_id)
+                data = await self._redis.hmget(
+                    hash_key, "id", "text", "memory_type",
+                    "source_agent", "source_conv", "access_count",
+                    "created_at",
+                )
+
+                if not data or not data[0]:
+                    continue
+
+                def _d(v):
+                    return v.decode("utf-8") if isinstance(v, bytes) else (v or "")
+
+                result = {
+                    "id": _d(data[0]),
+                    "text": _d(data[1]),
+                    "score": distance,
+                    "memory_type": _d(data[2]),
+                    "source_agent": _d(data[3]),
+                    "source_conv": _d(data[4]),
+                    "access_count": _d(data[5]),
+                    "created_at": _d(data[6]),
+                }
+
+                # Post-filter by memory_type if FILTER didn't work
+                # (FILTER expression support varies)
+                if memory_type and result["memory_type"] != memory_type:
+                    continue
+
+                results.append(result)
+
+                if len(results) >= limit:
+                    break
+
+            return results
 
         except Exception as e:
-            logger.warning(f"Search error: {e}")
+            logger.warning(f"VSIM search error, falling back to scan: {e}")
             return await self._scan_search(query_embedding, limit)
 
-    def _parse_search_results(self, results) -> list[dict[str, Any]]:
+    async def _ft_search(
+        self,
+        query_embedding: list[float],
+        limit: int = 5,
+        memory_type: str = None,
+        source_conv: str = None,
+    ) -> list[dict[str, Any]]:
+        """Search using RediSearch FT.SEARCH (legacy backend)."""
+        query_blob = _float_vector_to_bytes(query_embedding)
+
+        # Build filter
+        filters = "*"
+        if memory_type:
+            filters = f"@memory_type:{{{memory_type}}}"
+        if source_conv:
+            conv_filter = f"@source_conv:{{{source_conv}}}"
+            if filters == "*":
+                filters = conv_filter
+            else:
+                filters = f"({filters} {conv_filter})"
+
+        query = f"{filters}=>[KNN {limit} @embedding $query_vec AS score]"
+
+        results = await self._redis.execute_command(
+            "FT.SEARCH", self._index_name,
+            query,
+            "PARAMS", "2", "query_vec", query_blob,
+            "SORTBY", "score",
+            "LIMIT", "0", str(limit),
+            "RETURN", "7",
+            "id", "text", "score", "memory_type",
+            "source_agent", "source_conv", "access_count",
+            "DIALECT", "2",
+        )
+
+        self._searched += 1
+        return self._parse_ft_results(results)
+
+    def _parse_ft_results(self, results) -> list[dict[str, Any]]:
         """Parse FT.SEARCH results into clean dicts."""
         if not results or results[0] == 0:
             return []
 
         parsed = []
-        total = results[0]
         i = 1
 
         while i < len(results):
@@ -381,7 +604,6 @@ class MemoryIndex:
                     v = v.decode("utf-8")
                 doc[k] = v
 
-            # Convert score to float
             if "score" in doc:
                 try:
                     doc["score"] = float(doc["score"])
@@ -397,7 +619,7 @@ class MemoryIndex:
         query_embedding: list[float],
         limit: int = 5,
     ) -> list[dict[str, Any]]:
-        """Fallback: brute-force similarity search when RediSearch is unavailable.
+        """Fallback: brute-force similarity search when no index is available.
 
         Scans all memory hashes and computes cosine similarity.
         Only practical for small memory sets (< 10K items).
@@ -416,7 +638,6 @@ class MemoryIndex:
                 if not data:
                     continue
 
-                # Get embedding
                 emb_data = data.get(b"embedding") or data.get("embedding")
                 if not emb_data:
                     continue
@@ -431,11 +652,9 @@ class MemoryIndex:
                 if stored_norm == 0:
                     continue
 
-                # Cosine distance
                 similarity = float(np.dot(query_vec, stored_vec) / (query_norm * stored_norm))
                 distance = 1.0 - similarity
 
-                # Decode fields
                 def _decode(val):
                     return val.decode("utf-8") if isinstance(val, bytes) else val
 
@@ -447,16 +666,15 @@ class MemoryIndex:
                     "source_agent": _decode(data.get(b"source_agent", data.get("source_agent", ""))),
                     "source_conv": _decode(data.get(b"source_conv", data.get("source_conv", ""))),
                     "access_count": _decode(data.get(b"access_count", data.get("access_count", "0"))),
+                    "created_at": _decode(data.get(b"created_at", data.get("created_at", "0"))),
                 })
 
             except Exception as e:
                 logger.warning(f"Scan search error on key {key}: {e}")
                 continue
 
-        # Sort by distance (lowest = most similar) and limit
         results.sort(key=lambda r: r["score"])
         self._searched += 1
-
         return results[:limit]
 
     # ── Memory Management ────────────────────────────────────────
@@ -479,13 +697,11 @@ class MemoryIndex:
                 continue  # Skip binary embedding in response
             result[k] = _decode(v)
 
-        # Touch the memory (update access stats)
         await self._touch_memory(memory_id)
-
         return result
 
     async def delete_memory(self, memory_id: str) -> bool:
-        """Delete a memory and remove from hash index."""
+        """Delete a memory and remove from hash index + vectorset."""
         key = self._mem_key(memory_id)
 
         # Get content hash to remove from index
@@ -495,11 +711,69 @@ class MemoryIndex:
                 c_hash = c_hash.decode("utf-8")
             await self._redis.zrem(self._hash_index_key(), c_hash)
 
+        # Remove from vectorset (VSIM backend)
+        if self._backend == self.BACKEND_VSIM:
+            try:
+                await self._redis.execute_command(
+                    "VREM", self._vectorset_key, memory_id
+                )
+            except Exception:
+                pass
+
         result = await self._redis.delete(key)
         return bool(result)
 
+    # Alias for rag.py pruning
+    async def delete(self, memory_id: str) -> bool:
+        """Delete a memory by ID. Alias for delete_memory()."""
+        return await self.delete_memory(memory_id)
+
+    async def scan_all(self) -> list[dict[str, Any]]:
+        """Scan all memories and return their metadata (no embeddings).
+
+        Used by pruning — returns id, memory_type, created_at, access_count.
+        """
+        memories = []
+        pattern = self._mem_pattern()
+
+        async for key in self._redis.scan_iter(match=pattern, count=100):
+            try:
+                data = await self._redis.hmget(
+                    key, "id", "memory_type", "created_at", "access_count"
+                )
+                if not data or not data[0]:
+                    continue
+
+                def _d(v):
+                    if v is None:
+                        return ""
+                    return v.decode("utf-8") if isinstance(v, bytes) else v
+
+                mem_id = _d(data[0])
+                created_at = _d(data[2])
+                access_count = _d(data[3])
+
+                memories.append({
+                    "id": mem_id,
+                    "memory_type": _d(data[1]),
+                    "created_at": float(created_at) if created_at else 0,
+                    "access_count": int(access_count) if access_count else 0,
+                })
+            except Exception:
+                continue
+
+        return memories
+
     async def count_memories(self) -> int:
         """Count total memories in the index."""
+        if self._backend == self.BACKEND_VSIM:
+            try:
+                count = await self._redis.execute_command("VCARD", self._vectorset_key)
+                return int(count or 0)
+            except Exception:
+                pass
+
+        # Fallback: scan
         count = 0
         pattern = self._mem_pattern()
         async for _ in self._redis.scan_iter(match=pattern, count=100):
@@ -527,9 +801,8 @@ class MemoryIndex:
         self, limit: int = 20, memory_type: str = None
     ) -> list[dict[str, Any]]:
         """Get most recently created memories."""
-        if self._index_available and memory_type:
+        if self._backend == self.BACKEND_REDISEARCH and memory_type:
             try:
-                # Use FT.SEARCH with sort
                 query = f"@memory_type:{{{memory_type}}}"
                 results = await self._redis.execute_command(
                     "FT.SEARCH", self._index_name,
@@ -541,7 +814,7 @@ class MemoryIndex:
                     "created_at", "access_count",
                     "DIALECT", "2",
                 )
-                return self._parse_search_results(results)
+                return self._parse_ft_results(results)
             except Exception:
                 pass
 
@@ -575,7 +848,6 @@ class MemoryIndex:
             except Exception:
                 continue
 
-        # Sort by created_at DESC
         memories.sort(key=lambda m: m.get("created_at", "0"), reverse=True)
         return memories[:limit]
 
@@ -588,31 +860,42 @@ class MemoryIndex:
             "searched": self._searched,
             "duplicates_found": self._duplicates_found,
             "index_available": self._index_available,
+            "backend": self._backend,
             "vector_dims": self.vector_dims,
         }
 
     async def get_index_info(self) -> dict[str, Any]:
-        """Get RediSearch index info (if available)."""
-        if not self._index_available:
-            return {"available": False}
+        """Get index info for the active backend."""
+        if self._backend == self.BACKEND_VSIM:
+            try:
+                count = await self._redis.execute_command("VCARD", self._vectorset_key)
+                return {
+                    "available": True,
+                    "backend": "vsim",
+                    "num_vectors": int(count or 0),
+                }
+            except Exception as e:
+                return {"available": True, "backend": "vsim", "error": str(e)}
 
-        try:
-            info = await self._redis.execute_command(
-                "FT.INFO", self._index_name
-            )
-            # Parse the flat list into a dict
-            result = {"available": True}
-            if isinstance(info, list):
-                for i in range(0, len(info) - 1, 2):
-                    k = info[i]
-                    v = info[i + 1]
-                    if isinstance(k, bytes):
-                        k = k.decode("utf-8")
-                    if isinstance(v, bytes):
-                        v = v.decode("utf-8")
-                    if k in ("num_docs", "num_records", "num_terms",
-                             "total_indexing_time", "bytes_per_record_avg"):
-                        result[k] = v
-            return result
-        except Exception as e:
-            return {"available": True, "error": str(e)}
+        elif self._backend == self.BACKEND_REDISEARCH:
+            try:
+                info = await self._redis.execute_command(
+                    "FT.INFO", self._index_name
+                )
+                result = {"available": True, "backend": "redisearch"}
+                if isinstance(info, list):
+                    for i in range(0, len(info) - 1, 2):
+                        k = info[i]
+                        v = info[i + 1]
+                        if isinstance(k, bytes):
+                            k = k.decode("utf-8")
+                        if isinstance(v, bytes):
+                            v = v.decode("utf-8")
+                        if k in ("num_docs", "num_records", "num_terms",
+                                 "total_indexing_time", "bytes_per_record_avg"):
+                            result[k] = v
+                return result
+            except Exception as e:
+                return {"available": True, "backend": "redisearch", "error": str(e)}
+
+        return {"available": False, "backend": "scan"}

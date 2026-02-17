@@ -132,10 +132,17 @@ class AgentRunner:
         rag_pipeline = getattr(s, "rag_pipeline", None)
         if rag_pipeline and rag_pipeline.is_active:
             try:
+                model_for_rag = self.force_model or "ollama"
+                # Fewer results for Ollama to keep context lean and inference fast
+                default_limit = 3 if model_for_rag == "ollama" else 5
+                rag_limit = int(s.cfg.get("RAG_MAX_RESULTS", str(default_limit)))
+                # Cap Ollama at 3 regardless of DB config (32K context is tight)
+                if model_for_rag == "ollama":
+                    rag_limit = min(rag_limit, 3)
                 rag_context = await rag_pipeline.retrieve(
                     query=self.text,
-                    model=self.force_model or "ollama",
-                    limit=int(s.cfg.get("RAG_MAX_RESULTS", "5")),
+                    model=model_for_rag,
+                    limit=rag_limit,
                     source_conv=self.conv_id,
                 )
             except Exception:
@@ -214,6 +221,7 @@ class AgentRunner:
                 tools_for_api=tools_for_api,
                 ws_id=self.ws_id,
             )
+            self._attempt = attempt  # Expose for post-response hooks (web memory)
 
             try:
                 result = await attempt.execute()
