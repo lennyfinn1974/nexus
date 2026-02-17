@@ -292,7 +292,7 @@ def _discover_catalog_sources(cfg) -> list[str]:
 async def lifespan(app: FastAPI):
     load_dotenv()
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    database_url = os.getenv("DATABASE_URL", "postgresql+asyncpg://localhost/nexus")
+    database_url = os.getenv("DATABASE_URL", "postgresql+asyncpg://localhost/nexus?ssl=disable")
 
     state = AppState(base_dir=base_dir)
 
