@@ -37,7 +37,7 @@ from skills.engine import SkillsEngine
 from skills.ingest import get_ingest_prompt, read_file
 from storage.database import Database
 from storage.encryption import init as init_encryption
-from storage.engine import dispose_engine, get_session_factory, init_engine
+from storage.engine import create_all_tables, dispose_engine, get_session_factory, init_engine
 from tasks.queue import TaskQueue
 
 logger = logging.getLogger("nexus")
@@ -307,6 +307,10 @@ async def lifespan(app: FastAPI):
     # Database engine + connection pool
     os.makedirs(os.path.join(base_dir, "data"), exist_ok=True)
     init_engine(database_url)
+
+    # Create all ORM tables if they don't exist (safe on existing DBs — checkfirst=True)
+    await create_all_tables()
+
     session_factory = get_session_factory()
     logger.info("Database engine initialized")
 

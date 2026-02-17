@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from storage.models import Base
+
 logger = logging.getLogger("nexus.storage")
 
 _engine: Optional[AsyncEngine] = None
@@ -92,6 +94,20 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
     if _session_factory is None:
         raise RuntimeError("Session factory not initialized — call init_engine() first")
     return _session_factory
+
+
+async def create_all_tables() -> None:
+    """Create all SQLAlchemy ORM tables if they don't exist.
+
+    Safe to call on existing databases — uses checkfirst=True (the default),
+    so it only creates tables that are missing. Call once at application startup
+    after init_engine(), before any code tries to query tables.
+    """
+    if _engine is None:
+        raise RuntimeError("Database engine not initialized — call init_engine() first")
+    async with _engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    logger.info("Database tables verified/created (%d tables)", len(Base.metadata.tables))
 
 
 async def dispose_engine() -> None:
