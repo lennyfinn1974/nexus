@@ -711,7 +711,219 @@ class KnowledgeGraph:
         for entity in self._entities.values():
             entity.importance = self.compute_importance(entity)
 
-    # ── Extraction ────────────────────────────────────────────────
+    # ── LLM-Assisted Extraction ────────────────────────────────────
+
+    async def extract_with_llm(
+        self,
+        text: str,
+        model_router=None,
+        source_conv: str = "",
+    ) -> dict:
+        """Extract entities and relationships using an LLM for complex text.
+
+        Only invoked for rich content (>200 chars, not commands/greetings).
+        The LLM returns structured JSON which is parsed into Entity/Relationship
+        objects and merged into the graph.
+
+        Falls back to regex extraction if:
+            - model_router is None
+            - LLM call fails
+            - Response can't be parsed
+
+        Spacebot-inspired: Uses structured extraction prompt similar to
+        Spacebot's Cortex process for entity/relationship extraction.
+        """
+        if not model_router or len(text.strip()) < 200:
+            return await self.extract_and_store(text, source_conv=source_conv)
+
+        # Skip commands and greetings
+        text_lower = text.lower().strip()
+        if text_lower.startswith("/") or len(text_lower.split()) < 10:
+            return await self.extract_and_store(text, source_conv=source_conv)
+
+        start = time.time()
+        try:
+            prompt = self._build_extraction_prompt(text)
+            result = await model_router.chat(
+                messages=[{"role": "user", "content": prompt}],
+                system="You are an entity extraction engine. Return only valid JSON.",
+                model_name="ollama",  # Use local model to avoid API costs
+            )
+
+            content = result.get("content", "")
+            parsed = self._parse_llm_extraction(content)
+
+            if not parsed:
+                # Fallback to regex
+                return await self.extract_and_store(text, source_conv=source_conv)
+
+            # Process LLM-extracted entities
+            extracted_entities = []
+            for ent_data in parsed.get("entities", []):
+                name = ent_data.get("name", "").strip()
+                etype = ent_data.get("type", "concept").lower()
+                props = ent_data.get("properties", {})
+
+                if not name or len(name) < 2:
+                    continue
+                if etype not in ENTITY_TYPES:
+                    etype = "concept"
+
+                entity = self._get_or_create_entity(name, etype, properties=props)
+                extracted_entities.append(entity)
+
+            # Process LLM-extracted relationships
+            extracted_relationships = []
+            for rel_data in parsed.get("relationships", []):
+                from_name = rel_data.get("from", "").strip()
+                to_name = rel_data.get("to", "").strip()
+                rel_type = rel_data.get("type", "related_to").lower()
+                rel_props = rel_data.get("properties", {})
+
+                if not from_name or not to_name:
+                    continue
+
+                # Resolve entity IDs (create if needed)
+                from_etype = self._guess_entity_type(from_name)
+                to_etype = self._guess_entity_type(to_name)
+                from_entity = self._get_or_create_entity(from_name, from_etype)
+                to_entity = self._get_or_create_entity(to_name, to_etype)
+
+                if rel_type not in RELATIONSHIP_TYPES:
+                    rel_type = "related_to"
+
+                rel = self._add_relationship(
+                    from_entity.id, to_entity.id, rel_type,
+                    properties=rel_props,
+                )
+                extracted_relationships.append(rel)
+
+            # Process contradictions (LLM can identify superseded facts)
+            for contra in parsed.get("contradictions", []):
+                old_fact = contra.get("old", {})
+                new_fact = contra.get("new", {})
+                reason = contra.get("reason", "")
+
+                if old_fact and new_fact:
+                    old_from = self._get_or_create_entity(
+                        old_fact.get("from", ""), self._guess_entity_type(old_fact.get("from", ""))
+                    )
+                    old_to = self._get_or_create_entity(
+                        old_fact.get("to", ""), self._guess_entity_type(old_fact.get("to", ""))
+                    )
+                    new_from = self._get_or_create_entity(
+                        new_fact.get("from", ""), self._guess_entity_type(new_fact.get("from", ""))
+                    )
+                    new_to = self._get_or_create_entity(
+                        new_fact.get("to", ""), self._guess_entity_type(new_fact.get("to", ""))
+                    )
+
+                    self.add_contradicts(
+                        old_from.id, old_to.id, old_fact.get("type", "related_to"),
+                        new_from.id, new_to.id, new_fact.get("type", "related_to"),
+                        reason=reason,
+                    )
+
+            # Update importance scores
+            for entity in extracted_entities:
+                entity.importance = self.compute_importance(entity)
+
+            # Auto-save check
+            dirty_count = len(self._dirty_entities) + len(self._dirty_relationships)
+            time_since_save = time.time() - self._last_save_time
+            if dirty_count > 20 or (dirty_count > 0 and time_since_save > 300):
+                try:
+                    await self.save_to_db()
+                except Exception:
+                    pass
+
+            elapsed = int((time.time() - start) * 1000)
+            self._total_extractions += 1
+            self._total_extract_ms += elapsed
+
+            logger.info(
+                f"KG LLM extraction: {len(extracted_entities)} entities, "
+                f"{len(extracted_relationships)} relationships, "
+                f"{len(parsed.get('contradictions', []))} contradictions "
+                f"[{elapsed}ms]"
+            )
+
+            return {
+                "entities": [e.to_dict() for e in extracted_entities],
+                "relationships": [r.to_dict() for r in extracted_relationships],
+                "method": "llm",
+            }
+
+        except Exception as e:
+            logger.warning(f"KG LLM extraction failed, falling back to regex: {e}")
+            return await self.extract_and_store(text, source_conv=source_conv)
+
+    def _build_extraction_prompt(self, text: str) -> str:
+        """Build the LLM extraction prompt."""
+        return f"""Extract entities and relationships from the following text.
+
+Return ONLY a JSON object with this structure:
+{{
+  "entities": [
+    {{"name": "...", "type": "person|project|technology|tool|concept|organization|location|file|url", "properties": {{}}}}
+  ],
+  "relationships": [
+    {{"from": "entity_name", "to": "entity_name", "type": "uses|works_on|part_of|related_to|depends_on|created_by|implements|mentioned_with", "properties": {{}}}}
+  ],
+  "contradictions": [
+    {{"old": {{"from": "...", "to": "...", "type": "..."}}, "new": {{"from": "...", "to": "...", "type": "..."}}, "reason": "..."}}
+  ]
+}}
+
+Rules:
+- Only extract clearly stated entities (no speculation)
+- Use the most specific entity type available
+- Properties can include: email, role, company, url, deadline, status, language, version
+- Contradictions: if the text says something that updates/replaces a previous fact, list it
+- If no entities found, return {{"entities": [], "relationships": [], "contradictions": []}}
+
+Text to extract from:
+{text[:3000]}"""
+
+    def _parse_llm_extraction(self, content: str) -> Optional[dict]:
+        """Parse LLM extraction response into structured data."""
+        if not content:
+            return None
+
+        try:
+            # Try to find JSON in the response
+            # Handle markdown code blocks
+            if "```json" in content:
+                start = content.index("```json") + 7
+                end = content.index("```", start)
+                content = content[start:end]
+            elif "```" in content:
+                start = content.index("```") + 3
+                end = content.index("```", start)
+                content = content[start:end]
+
+            # Strip leading/trailing whitespace
+            content = content.strip()
+
+            parsed = json.loads(content)
+
+            # Validate structure
+            if not isinstance(parsed, dict):
+                return None
+            if "entities" not in parsed:
+                parsed["entities"] = []
+            if "relationships" not in parsed:
+                parsed["relationships"] = []
+            if "contradictions" not in parsed:
+                parsed["contradictions"] = []
+
+            return parsed
+
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.debug(f"LLM extraction parse failed: {e}")
+            return None
+
+    # ── Regex Extraction ─────────────────────────────────────────
 
     async def extract_and_store(
         self,

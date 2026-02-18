@@ -710,6 +710,7 @@ async def _handle_user_message(
                     text=text,
                     final_response=final_response,
                     web_results=web_results,
+                    model_router=state.model_router,
                 )
             )
         else:
@@ -726,6 +727,7 @@ async def _run_memory_hooks_sequenced(
     text: str,
     final_response: str,
     web_results: list,
+    model_router=None,
 ):
     """Run all post-response memory hooks sequentially with delays.
 
@@ -752,9 +754,9 @@ async def _run_memory_hooks_sequenced(
         await _web_memory_ingest(rag_pipeline, conv_id, text, web_results)
         await asyncio.sleep(0.5)
 
-    # 4. Knowledge graph (regex extraction, may call embeddings)
+    # 4. Knowledge graph (regex or LLM extraction)
     if knowledge_graph:
-        await _kg_extract(knowledge_graph, conv_id, text, final_response)
+        await _kg_extract(knowledge_graph, conv_id, text, final_response, model_router)
 
 
 async def _extract_passive_memory(extractor, conv_id: str, user_msg: str, assistant_msg: str):
@@ -798,19 +800,35 @@ async def _web_memory_ingest(rag_pipeline, conv_id: str, user_msg: str, web_resu
         logger.warning(f"Web memory ingest failed: {e}", exc_info=True)
 
 
-async def _kg_extract(knowledge_graph, conv_id: str, user_msg: str, assistant_msg: str):
-    """Background task: extract entities and relationships into knowledge graph."""
+async def _kg_extract(knowledge_graph, conv_id: str, user_msg: str, assistant_msg: str, model_router=None):
+    """Background task: extract entities and relationships into knowledge graph.
+
+    Uses LLM-assisted extraction for rich content (>200 chars) and falls back
+    to regex for short/simple messages. LLM extraction also detects Contradicts
+    edges (superseded facts).
+    """
     try:
         combined = f"{user_msg}\n\n{assistant_msg}"
-        result = await knowledge_graph.extract_and_store(
-            text=combined,
-            source_conv=conv_id,
-        )
+
+        # Use LLM extraction for rich content when model_router is available
+        if model_router and len(combined.strip()) > 200:
+            result = await knowledge_graph.extract_with_llm(
+                text=combined,
+                model_router=model_router,
+                source_conv=conv_id,
+            )
+        else:
+            result = await knowledge_graph.extract_and_store(
+                text=combined,
+                source_conv=conv_id,
+            )
+
         entity_count = len(result.get("entities", []))
         rel_count = len(result.get("relationships", []))
+        method = result.get("method", "regex")
         if entity_count > 0:
             logger.info(
-                f"KG extracted: {entity_count} entities, {rel_count} relationships "
+                f"KG extracted ({method}): {entity_count} entities, {rel_count} relationships "
                 f"from {conv_id[:8]}"
             )
     except Exception as e:

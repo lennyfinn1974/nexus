@@ -103,6 +103,7 @@ class AppState:
     embedding_service: Any = None
     rag_pipeline: Any = None
     knowledge_graph: Any = None
+    memory_bulletin: Any = None
     allowed_origins: list = field(default_factory=list)
     base_dir: str = ""
 
@@ -717,6 +718,7 @@ async def lifespan(app: FastAPI):
             state.rag_pipeline = RAGPipeline(
                 embedding_service=state.embedding_service,
                 cluster_manager=state.cluster_manager,
+                database=state.db,
             )
             logger.info("RAG pipeline initialized (embedding + vector search active)")
         except Exception as e:
@@ -753,6 +755,42 @@ async def lifespan(app: FastAPI):
             logger.warning(f"Knowledge graph failed to initialize: {e}")
     else:
         logger.info("Knowledge graph disabled (KNOWLEDGE_GRAPH_ENABLED=false)")
+
+    # Memory Bulletin — periodic LLM-curated knowledge digest (Spacebot-inspired)
+    try:
+        from core.memory_bulletin import MemoryBulletin
+
+        state.memory_bulletin = MemoryBulletin(
+            knowledge_graph=getattr(state, "knowledge_graph", None),
+            passive_memory=getattr(state, "passive_memory", None),
+            rag_pipeline=getattr(state, "rag_pipeline", None),
+            model_router=state.model_router,
+            database=state.db,
+        )
+        # Initial refresh (non-blocking)
+        try:
+            await state.memory_bulletin.refresh()
+        except Exception:
+            pass
+
+        # Register periodic refresh (every 30 minutes)
+        async def _handle_bulletin_refresh(payload):
+            bulletin = getattr(app.state.nexus, "memory_bulletin", None)
+            if bulletin:
+                await bulletin.refresh()
+
+        state.task_queue.register_handler("bulletin_refresh", _handle_bulletin_refresh)
+        state.task_queue.register_periodic(
+            "bulletin_refresh", interval_seconds=1800, payload={},
+        )
+        logger.info(
+            f"Memory bulletin initialized "
+            f"({len(state.memory_bulletin.get_bulletin())} chars, "
+            f"refresh every 30 min)"
+        )
+    except Exception as e:
+        state.memory_bulletin = None
+        logger.warning(f"Memory bulletin failed to initialize: {e}")
 
     # Reminder Manager — scheduled user reminders
     try:

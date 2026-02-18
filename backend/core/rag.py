@@ -49,28 +49,32 @@ class RAGPipeline:
 
     Orchestrates:
         - Query embedding
-        - Memory search
+        - Memory search (vector + full-text hybrid with RRF)
         - Context formatting
         - Conversation/document ingestion
 
     Requires:
         - EmbeddingService for vector generation
         - ClusterManager (with MemoryIndex) for storage/search
+        - Database (optional) for full-text search in hybrid mode
     """
 
-    def __init__(self, embedding_service, cluster_manager):
+    def __init__(self, embedding_service, cluster_manager, database=None):
         """Initialize RAG pipeline.
 
         Args:
             embedding_service: EmbeddingService instance for vector generation
             cluster_manager: ClusterManager with active MemoryIndex
+            database: Database instance for PostgreSQL full-text search (optional)
         """
         self.embeddings = embedding_service
         self.cluster = cluster_manager
+        self.db = database  # For hybrid recall (FTS)
         self._total_retrievals = 0
         self._total_ingests = 0
         self._total_retrieve_ms = 0
         self._total_ingest_ms = 0
+        self._total_hybrid_retrievals = 0
 
     @property
     def is_active(self) -> bool:
@@ -92,6 +96,10 @@ class RAGPipeline:
     ) -> str:
         """Retrieve relevant context for a user query.
 
+        When a database is available and no type filter is specified, uses
+        hybrid retrieval (vector + FTS + RRF fusion) for better recall on
+        exact-match queries like names, codes, and specific terms.
+
         Args:
             query: The user's message to find context for
             model: Current model name (affects context budget)
@@ -107,6 +115,14 @@ class RAGPipeline:
 
         if not query or len(query.strip()) < 10:
             return ""
+
+        # Use hybrid retrieval when possible (no type filter, DB available)
+        if self.db and not memory_types:
+            result = await self.hybrid_retrieve(
+                query, model=model, limit=limit, source_conv=source_conv,
+            )
+            if result:
+                return result
 
         start = time.time()
         try:
@@ -243,6 +259,263 @@ class RAGPipeline:
         except Exception as e:
             logger.warning(f"RAG retrieval error: {e}")
             return ""
+
+    async def hybrid_retrieve(
+        self,
+        query: str,
+        model: str = "ollama",
+        limit: int = 5,
+        source_conv: str = "",
+        rrf_k: int = 60,
+    ) -> str:
+        """Hybrid retrieval: merge vector search + PostgreSQL full-text search via RRF.
+
+        Spacebot-inspired: Uses Reciprocal Rank Fusion (RRF) to combine results
+        from two independent search backends. Vector search excels at semantic
+        similarity, while FTS excels at exact-match queries (names, codes, terms).
+
+        RRF formula: score(doc) = sum( 1 / (k + rank_i) ) for each system i
+        where k=60 is a standard constant that prevents high-rank items from
+        dominating the score.
+
+        Falls back to vector-only retrieval if FTS is unavailable.
+
+        Args:
+            query: User's message
+            model: Current model name (affects context budget)
+            limit: Max results to return
+            source_conv: Current conversation ID (for filtering)
+            rrf_k: RRF constant (default 60, standard in literature)
+
+        Returns:
+            Formatted markdown context string
+        """
+        if not self.is_active:
+            return ""
+
+        if not query or len(query.strip()) < 10:
+            return ""
+
+        # If no DB available for FTS, fall back to standard vector retrieval
+        if not self.db:
+            return await self.retrieve(query, model=model, limit=limit, source_conv=source_conv)
+
+        start = time.time()
+        try:
+            # Run vector search and FTS in parallel
+            import asyncio
+
+            vector_task = asyncio.create_task(
+                self._vector_search(query, limit=limit * 2, source_conv=source_conv)
+            )
+            fts_task = asyncio.create_task(
+                self._fts_search(query, limit=limit * 2)
+            )
+
+            vector_results, fts_results = await asyncio.gather(
+                vector_task, fts_task, return_exceptions=True,
+            )
+
+            # Handle exceptions from either search
+            if isinstance(vector_results, Exception):
+                logger.warning(f"Hybrid vector search failed: {vector_results}")
+                vector_results = []
+            if isinstance(fts_results, Exception):
+                logger.debug(f"Hybrid FTS failed (non-fatal): {fts_results}")
+                fts_results = []
+
+            # If FTS returned nothing, fall back to vector-only
+            if not fts_results:
+                if vector_results:
+                    return await self.retrieve(
+                        query, model=model, limit=limit, source_conv=source_conv,
+                    )
+                return ""
+
+            # RRF fusion
+            fused = self._rrf_fuse(vector_results, fts_results, k=rrf_k)
+
+            # Take top results
+            top = fused[:limit]
+
+            if not top:
+                return ""
+
+            # Format for model's context budget
+            max_chars = RAG_CONTEXT_LIMITS.get(model, RAG_CONTEXT_LIMITS["ollama"])
+            formatted = self._format_results(top, max_chars)
+
+            total_ms = int((time.time() - start) * 1000)
+            self._total_retrievals += 1
+            self._total_hybrid_retrievals += 1
+            self._total_retrieve_ms += total_ms
+
+            logger.info(
+                f"RAG hybrid retrieve: {len(top)} results for '{query[:60]}' "
+                f"(vector={len(vector_results)}, fts={len(fts_results)}, fused={len(fused)}) "
+                f"[{total_ms}ms]"
+            )
+
+            return formatted
+
+        except Exception as e:
+            logger.warning(f"Hybrid retrieval error, falling back to vector: {e}")
+            return await self.retrieve(
+                query, model=model, limit=limit, source_conv=source_conv,
+            )
+
+    async def _vector_search(
+        self,
+        query: str,
+        limit: int = 10,
+        source_conv: str = "",
+    ) -> list[dict]:
+        """Run vector similarity search (existing pipeline)."""
+        query_embedding = await self.embeddings.embed(query)
+        if query_embedding is None:
+            return []
+
+        results = await self.cluster.search_memory(query_embedding, limit=limit)
+        if not results:
+            return []
+
+        # Filter and add rank info
+        filtered = []
+        for r in results:
+            score = r.get("score", 1.0)
+            if score > MAX_SIMILARITY_SCORE:
+                continue
+
+            mem_type = r.get("memory_type", "")
+            if (
+                source_conv
+                and r.get("source_conv") == source_conv
+                and mem_type == MEMORY_TYPE_CONVERSATION
+            ):
+                continue
+
+            text = r.get("text", "")
+            if len(text) < MIN_TEXT_LENGTH:
+                continue
+
+            r["_source"] = "vector"
+            filtered.append(r)
+
+        return filtered
+
+    async def _fts_search(
+        self,
+        query: str,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Run PostgreSQL full-text search on stored messages."""
+        if not self.db:
+            return []
+
+        try:
+            rows = await self.db.search_messages(query, limit=limit)
+            results = []
+            for row in rows:
+                content = row.get("content", "")
+                if len(content) < MIN_TEXT_LENGTH:
+                    continue
+
+                results.append({
+                    "id": f"fts-{row.get('id', '')}",
+                    "text": content[:2000],
+                    "score": 1.0 - min(row.get("rank", 0), 1.0),  # Convert rank to distance-like
+                    "memory_type": "conversation",
+                    "source_conv": row.get("conversation_id", ""),
+                    "access_count": "0",
+                    "_source": "fts",
+                    "_fts_rank": row.get("rank", 0),
+                    "_headline": row.get("headline", ""),
+                })
+
+            return results
+
+        except Exception as e:
+            logger.debug(f"FTS search failed: {e}")
+            return []
+
+    def _rrf_fuse(
+        self,
+        vector_results: list[dict],
+        fts_results: list[dict],
+        k: int = 60,
+    ) -> list[dict]:
+        """Reciprocal Rank Fusion to merge two ranked result lists.
+
+        RRF score = sum( 1 / (k + rank) ) across all systems where doc appears.
+
+        Spacebot uses this same approach to merge vector + full-text results.
+        """
+        # Build a unified document map keyed by text content hash
+        doc_map: dict[str, dict] = {}  # content_key → {doc, rrf_score, sources}
+
+        def _content_key(text: str) -> str:
+            """Normalize text for matching across sources."""
+            return text.strip().lower()[:200]
+
+        # Score vector results
+        for rank, r in enumerate(vector_results):
+            key = _content_key(r.get("text", ""))
+            if not key:
+                continue
+
+            rrf_score = 1.0 / (k + rank)
+
+            if key in doc_map:
+                doc_map[key]["rrf_score"] += rrf_score
+                doc_map[key]["sources"].append("vector")
+            else:
+                doc_map[key] = {
+                    "doc": r,
+                    "rrf_score": rrf_score,
+                    "sources": ["vector"],
+                }
+
+        # Score FTS results
+        for rank, r in enumerate(fts_results):
+            key = _content_key(r.get("text", ""))
+            if not key:
+                continue
+
+            rrf_score = 1.0 / (k + rank)
+
+            if key in doc_map:
+                doc_map[key]["rrf_score"] += rrf_score
+                doc_map[key]["sources"].append("fts")
+                # If FTS has a headline, add it
+                headline = r.get("_headline", "")
+                if headline:
+                    doc_map[key]["doc"]["_headline"] = headline
+            else:
+                doc_map[key] = {
+                    "doc": r,
+                    "rrf_score": rrf_score,
+                    "sources": ["fts"],
+                }
+
+        # Sort by RRF score (highest first) and convert to result list
+        ranked = sorted(doc_map.values(), key=lambda x: x["rrf_score"], reverse=True)
+
+        results = []
+        for entry in ranked:
+            doc = entry["doc"]
+            # Convert RRF score to a distance-like score for compatibility
+            # Higher RRF = better, so invert (lower distance = better match)
+            doc["score"] = 1.0 / (1.0 + entry["rrf_score"] * 100)
+            doc["_rrf_score"] = round(entry["rrf_score"], 6)
+            doc["_sources"] = entry["sources"]
+
+            # Boost docs found by BOTH systems
+            if len(entry["sources"]) > 1:
+                doc["score"] *= 0.5  # Significant boost (lower = better)
+
+            results.append(doc)
+
+        return results
 
     async def ingest_conversation(
         self,
@@ -731,8 +1004,10 @@ class RAGPipeline:
         return {
             "active": self.is_active,
             "total_retrievals": self._total_retrievals,
+            "hybrid_retrievals": self._total_hybrid_retrievals,
             "total_ingests": self._total_ingests,
             "avg_retrieve_ms": round(avg_retrieve, 1),
             "avg_ingest_ms": round(avg_ingest, 1),
+            "hybrid_enabled": self.db is not None,
             "embedding": self.embeddings.get_stats() if self.embeddings else None,
         }

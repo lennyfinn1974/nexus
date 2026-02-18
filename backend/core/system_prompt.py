@@ -61,6 +61,7 @@ def build_system_prompt(
     memory_context: str = "",
     rag_context: str = "",
     kg_context: str = "",
+    bulletin_context: str = "",
 ) -> str:
     """Build the full system prompt from config, plugins, and tool mode."""
     name = cfg.agent_name if cfg else "Nexus"
@@ -236,6 +237,13 @@ the results. Don't just dump raw tool output on the user."""
     if kg_context:
         if model != "ollama":  # Skip KG for Ollama to save space
             prompt += f"\n\n{kg_context}"
+
+    # Inject Memory Bulletin (persistent knowledge digest)
+    if bulletin_context:
+        remaining_budget = max(0, max_context_chars - len(memory_context or "") - len(rag_context or ""))
+        if remaining_budget > 200:
+            bulletin_text = bulletin_context[:remaining_budget]
+            prompt += f"\n\nKnowledge digest:\n{bulletin_text}"
 
     # In legacy mode, append text-based tool descriptions from plugins.
     # In native mode, skip this — tool definitions are sent via the API.

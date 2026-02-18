@@ -156,6 +156,13 @@ class AgentRunner:
                 text=self.text, limit=8, max_depth=2,
             )
 
+        def _get_bulletin():
+            """Get cached memory bulletin (sub-ms, no I/O)."""
+            bulletin = getattr(s, "memory_bulletin", None)
+            if not bulletin:
+                return ""
+            return bulletin.get_bulletin()
+
         try:
             results = await asyncio.wait_for(
                 asyncio.gather(_get_memory(), _get_rag(), _get_kg(), return_exceptions=True),
@@ -168,6 +175,9 @@ class AgentRunner:
             logger.warning("Memory/RAG/KG retrieval timed out (2s) — proceeding without context")
         except Exception:
             pass  # Never block on retrieval failure
+
+        # Bulletin is sync (cached in-memory), never blocks
+        bulletin_context = _get_bulletin()
 
         # 4. Try each candidate model
         last_error: Exception | None = None
@@ -191,6 +201,7 @@ class AgentRunner:
                 s.cfg, s.plugin_manager, tool_calling_mode=tool_mode,
                 model=model_name, memory_context=memory_context,
                 rag_context=rag_context, kg_context=kg_context,
+                bulletin_context=bulletin_context,
             )
 
             # Skill context injection — @skill-name explicit invocation or auto-match
