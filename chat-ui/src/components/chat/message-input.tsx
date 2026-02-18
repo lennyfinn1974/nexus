@@ -13,13 +13,13 @@ export default function MessageInput({ onSend, onAbort, isStreaming, disabled }:
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const handleSend = useCallback(() => {
-    if (!value.trim() || isStreaming || disabled) return
+    if (!value.trim() || disabled) return
     onSend(value.trim())
     setValue('')
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
-  }, [value, isStreaming, disabled, onSend])
+  }, [value, disabled, onSend])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -64,7 +64,7 @@ export default function MessageInput({ onSend, onAbort, isStreaming, disabled }:
           }}
           disabled={disabled}
         />
-        {isStreaming ? (
+        {isStreaming && (
           <button
             onClick={onAbort}
             className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-colors"
@@ -73,21 +73,20 @@ export default function MessageInput({ onSend, onAbort, isStreaming, disabled }:
           >
             <Square size={14} />
           </button>
-        ) : (
-          <button
-            onClick={handleSend}
-            disabled={!value.trim() || disabled}
-            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-colors"
-            style={{
-              background: value.trim() ? 'var(--accent)' : 'var(--bg-hover)',
-              color: value.trim() ? '#fff' : 'var(--text-muted)',
-              cursor: value.trim() ? 'pointer' : 'default',
-            }}
-            title="Send message"
-          >
-            <Send size={14} />
-          </button>
         )}
+        <button
+          onClick={handleSend}
+          disabled={!value.trim() || disabled}
+          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-colors"
+          style={{
+            background: value.trim() ? 'var(--accent)' : 'var(--bg-hover)',
+            color: value.trim() ? '#fff' : 'var(--text-muted)',
+            cursor: value.trim() ? 'pointer' : 'default',
+          }}
+          title={isStreaming && value.trim() ? 'Queue message (sends after current response)' : 'Send message'}
+        >
+          <Send size={14} />
+        </button>
       </div>
       <div className="mx-auto mt-1.5 max-w-3xl text-center">
         <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>

@@ -346,11 +346,18 @@ async def test_setting(key: str):
 async def get_models():
     """Get current model configuration and status."""
     status = _models.status
+    # Detect local backend type (Ollama vs llama-server)
+    ollama_client = getattr(_models, "_ollama", None)
+    local_backend = "ollama"
+    if ollama_client and hasattr(ollama_client, "_backend"):
+        local_backend = ollama_client._backend or "ollama"
+
     return JSONResponse(
         {
             "ollama_model": _cfg.ollama_model,
             "ollama_base_url": _cfg.ollama_base_url,
             "ollama_available": status["ollama_available"],
+            "ollama_backend": local_backend,
             "claude_model": _cfg.claude_model,
             "claude_available": status["claude_available"],
             "claude_code_available": status.get("claude_code_available", False),

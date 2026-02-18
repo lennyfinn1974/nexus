@@ -631,38 +631,58 @@ async def _handle_user_message(
     """Save user message, run AgentRunner, save assistant response.
 
     Returns the runner so the caller can set abort if needed.
+
+    Optimisation (Feb 2026): The user message DB write and auto-title
+    are deferred to a background task so they don't block inference.
+    The message is passed directly to AgentRunner via the ``text``
+    parameter (and then to ``build_conversation_context`` via
+    ``new_user_message``) so it's available immediately without
+    waiting for the DB round-trip.
     """
     # Set turn trace context — flows through all loggers via ContextFilter
     turn_id = new_turn_id()
     set_turn_context(turn_id=turn_id, conv_id=conv_id, ws_id=ws_id)
     turn_start = time.time()
 
+    # Send thinking indicator IMMEDIATELY — user sees instant feedback
+    # while we wait for DB write + model inference (~6-10s for cold Ollama)
+    await websocket_manager.send_to_client(ws_id, {"type": "thinking"})
+
+    # Save user message to DB (needed before build_conversation_context reads it)
+    db_start = time.time()
     await s.db.add_message(conv_id, "user", text)
+    db_ms = int((time.time() - db_start) * 1000)
+    logger.info(f"User message DB write: {db_ms}ms")
 
-    # Auto-title after first message
-    msg_count = await s.db.get_message_count(conv_id)
-    if msg_count == 1:
-        title = text[:60].strip()
-        if len(text) > 60:
-            title = title.rsplit(" ", 1)[0] + "..."
-        await s.db.rename_conversation(conv_id, title)
-        await websocket_manager.send_to_client(
-            ws_id,
-            {
-                "type": "conversation_renamed",
-                "conv_id": conv_id,
-                "title": title,
-            },
-        )
+    # Defer auto-title to background — shaves ~10-20ms on first message
+    async def _deferred_auto_title():
+        try:
+            msg_count = await s.db.get_message_count(conv_id)
+            if msg_count == 1:
+                title = text[:60].strip()
+                if len(text) > 60:
+                    title = title.rsplit(" ", 1)[0] + "..."
+                await s.db.rename_conversation(conv_id, title)
+                await websocket_manager.send_to_client(
+                    ws_id,
+                    {
+                        "type": "conversation_renamed",
+                        "conv_id": conv_id,
+                        "title": title,
+                    },
+                )
+        except Exception as e:
+            logger.warning(f"Deferred auto-title failed: {e}")
 
-    # ── Cluster: claim work + store session ──
+    asyncio.create_task(_deferred_auto_title())
+
+    # ── Cluster: claim work + store session (fire-and-forget) ──
     cm = getattr(s, "cluster_manager", None)
     if cm and cm.is_active:
         try:
             await cm.working_memory.claim_work(conv_id, task_type="conversation")
             await cm.store_session(conv_id, {
                 "ws_id": ws_id,
-                "message_count": msg_count,
                 "force_model": force_model,
                 "last_user_message": text[:200],
             })

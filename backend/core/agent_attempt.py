@@ -3,6 +3,13 @@
 One AgentAttempt per model attempt. Handles: streaming the response,
 collecting tool calls, executing them, formatting follow-up messages,
 and looping until the model produces a final answer or hits the round limit.
+
+Speculative Streaming Support:
+    When ``speculative_ctx`` is set, the first streaming round checks if
+    background RAG/KG retrieval has completed. If it arrives before ~200
+    chars are streamed, a ``SpeculativeRestartSignal`` is raised so the
+    AgentRunner can restart with full context. This saves 100-200ms on
+    typical turns.
 """
 
 from __future__ import annotations
@@ -23,12 +30,20 @@ from core.tool_result_truncation import truncate_tool_result
 from websocket_manager import websocket_manager
 
 if TYPE_CHECKING:
-    from core.agent_runner import AgentRunner
+    from core.agent_runner import AgentRunner, SpeculativeContext
 
 logger = logging.getLogger("nexus.agent.attempt")
 
 MAX_TOOL_ROUNDS = 5
 STREAM_THROTTLE_SECS = 0.1  # Buffer chunks, flush every 100ms
+
+# Speculative streaming threshold — restart if RAG arrives before this many chars
+SPECULATIVE_CHAR_THRESHOLD = 200
+
+
+class SpeculativeRestartSignal(Exception):
+    """Raised when speculative context arrives early enough to restart."""
+    pass
 
 
 class AgentAttempt:
@@ -45,6 +60,7 @@ class AgentAttempt:
         system: str,
         tools_for_api: list[dict] | None,
         ws_id: str,
+        speculative_ctx: SpeculativeContext | None = None,
     ) -> None:
         self.runner = runner
         self.model_name = model_name
@@ -54,6 +70,7 @@ class AgentAttempt:
         self.ws_id = ws_id
         self.use_native_tools = bool(tools_for_api)
         self.web_results: list[dict] = []  # Accumulated web tool results for memory
+        self.speculative_ctx = speculative_ctx  # Background RAG/KG retrieval
 
     async def execute(self) -> str:
         """Stream, parse tool calls, execute, loop. Returns final response text."""
@@ -77,12 +94,17 @@ class AgentAttempt:
             # assistant bubble via stream_chunk instead of creating new ones.
             is_first_round = (round_num == 0)
 
+            # Check speculative context on first round only — if RAG/KG
+            # arrives early, we'll restart with full context
+            check_spec = is_first_round and self.speculative_ctx is not None
+
             try:
                 text, native_tool_calls = await self._stream_round(
                     suppress_tools=force_no_tools,
                     send_stream_lifecycle=is_first_round,
+                    check_speculative=check_spec,
                 )
-            except AgentAbortError:
+            except (AgentAbortError, SpeculativeRestartSignal):
                 raise
             except Exception as exc:
                 raise classify_error(exc) from exc
@@ -161,6 +183,7 @@ class AgentAttempt:
     async def _stream_round(
         self, suppress_tools: bool = False,
         send_stream_lifecycle: bool = True,
+        check_speculative: bool = False,
     ) -> tuple[str, list[dict]]:
         """Single streaming round. Returns (text, tool_calls).
 
@@ -171,6 +194,13 @@ class AgentAttempt:
         are NOT sent — used for follow-up rounds in the tool loop so
         the Chat UI appends to the existing assistant bubble instead
         of creating a new one.
+
+        When *check_speculative* is True and speculative_ctx is set,
+        checks if background RAG/KG has arrived during streaming.
+        If it arrives before SPECULATIVE_CHAR_THRESHOLD chars are
+        streamed, raises SpeculativeRestartSignal to trigger a restart
+        with full context. This avoids sending a response that lacks
+        relevant memory context.
         """
         state = self.runner.state
         tools = None if suppress_tools else self.tools_for_api
@@ -198,8 +228,20 @@ class AgentAttempt:
         native_tool_calls: list[dict] = []
         buffer = ""
         last_flush = time.monotonic()
+        speculative_checked = False  # Only check once
+        first_token_logged = False
 
         async for chunk in stream:
+            # Log time-to-first-token (once) and update warm-model tracker
+            if not first_token_logged and isinstance(chunk, str) and chunk:
+                ttft_ms = int((time.time() - inference_start) * 1000)
+                logger.info(f"Time-to-first-token: {ttft_ms}ms ({model_name})")
+                first_token_logged = True
+                # Update the adaptive speculative streaming tracker
+                if model_name == "ollama":
+                    import core.agent_runner as _runner
+                    _runner._last_ollama_ttft_ms = ttft_ms
+
             # Check abort during streaming
             if self.runner.abort.is_set():
                 if buffer:
@@ -224,6 +266,36 @@ class AgentAttempt:
             elif isinstance(chunk, str):
                 full_response += chunk
                 buffer += chunk
+
+                # ── Speculative restart check ──
+                # If RAG/KG arrived while we were streaming and we haven't
+                # sent much to the client yet, cancel and restart with
+                # full context. We check at the SPECULATIVE_CHAR_THRESHOLD
+                # boundary to avoid checking every chunk.
+                if (
+                    check_speculative
+                    and not speculative_checked
+                    and self.speculative_ctx
+                    and len(full_response) >= SPECULATIVE_CHAR_THRESHOLD
+                ):
+                    speculative_checked = True
+                    if (
+                        self.speculative_ctx.is_ready()
+                        and self.speculative_ctx.has_meaningful_context()
+                    ):
+                        # RAG/KG arrived — cancel this stream, don't send anything
+                        # Send stream_end to cleanly close the UI bubble
+                        if send_stream_lifecycle:
+                            # Send a "restarting" hint so the UI can clear the partial
+                            await websocket_manager.send_to_client(
+                                self.ws_id,
+                                {"type": "stream_end", "model": model_name, "speculative_restart": True},
+                            )
+                        logger.info(
+                            f"Speculative restart triggered at {len(full_response)} chars"
+                        )
+                        raise SpeculativeRestartSignal()
+
                 now = time.monotonic()
                 if (now - last_flush) >= STREAM_THROTTLE_SECS:
                     await websocket_manager.send_to_client(

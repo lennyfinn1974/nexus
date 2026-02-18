@@ -6,6 +6,7 @@ import asyncio
 import logging
 import logging.handlers
 import os
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -356,6 +357,13 @@ async def lifespan(app: FastAPI):
     state.session_factory = session_factory  # Shared with periodic tasks (archival)
     logger.info("Database engine initialized")
 
+    # Ensure multi-tenant columns exist BEFORE ConfigManager loads settings
+    # (ConfigManager.connect() SELECTs org_id from settings table)
+    _early_db = Database(session_factory)
+    await _early_db.ensure_org_id_columns()
+    del _early_db
+    logger.info("Pre-ConfigManager tenant migration complete")
+
     # Config Manager
     state.cfg = ConfigManager(session_factory, base_dir)
     await state.cfg.connect()
@@ -379,8 +387,7 @@ async def lifespan(app: FastAPI):
     state.db = Database(session_factory)
     await state.db.ensure_summary_table()
     await state.db.ensure_work_items_table()
-    await state.db.ensure_org_id_columns()
-    logger.info("Database connected (multi-tenant columns ensured)")
+    logger.info("Database connected")
 
     # Personal Memory System — knowledge associations, preferences, patterns, goals
     try:
@@ -866,6 +873,33 @@ async def lifespan(app: FastAPI):
 
     # Expose state on the app
     app.state.nexus = state
+
+    # ── Warmup Ollama model (pre-load into VRAM) ──
+    # Sends a tiny request to force the model into GPU memory so the first
+    # user request doesn't pay the cold-start penalty (~6-10s for 30B models).
+    async def _warmup_ollama():
+        try:
+            ollama_client = state.model_router.ollama
+            if ollama_client and state.model_router.status.get("ollama_available"):
+                import httpx
+                warmup_start = time.time()
+                async with httpx.AsyncClient(base_url=ollama_client.base_url, timeout=30.0) as client:
+                    resp = await client.post("/api/generate", json={
+                        "model": ollama_client.model,
+                        "prompt": "hi",
+                        "stream": False,
+                        "options": {"num_predict": 1},
+                    })
+                    warmup_ms = int((time.time() - warmup_start) * 1000)
+                    if resp.status_code == 200:
+                        logger.info(f"Ollama model warmup: {ollama_client.model} loaded in {warmup_ms}ms")
+                    else:
+                        logger.warning(f"Ollama warmup returned {resp.status_code} ({warmup_ms}ms)")
+        except Exception as e:
+            logger.warning(f"Ollama warmup failed (non-blocking): {e}")
+
+    # Run warmup in background — don't block server startup
+    asyncio.create_task(_warmup_ollama())
 
     logger.info(f"Nexus v2 ready at http://{state.cfg.host}:{state.cfg.port}")
     yield

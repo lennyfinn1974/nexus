@@ -305,9 +305,11 @@ class RAGPipeline:
         if not query or len(query.strip()) < 10:
             return ""
 
-        # If no DB available for FTS, fall back to standard vector retrieval
+        # If no DB available for FTS, fall back to vector-only (bypass hybrid)
         if not self.db:
-            return await self.retrieve(query, model=model, limit=limit, source_conv=source_conv)
+            return await self._vector_only_retrieve(
+                query, model=model, limit=limit, source_conv=source_conv,
+            )
 
         start = time.time()
         try:
@@ -333,10 +335,10 @@ class RAGPipeline:
                 logger.debug(f"Hybrid FTS failed (non-fatal): {fts_results}")
                 fts_results = []
 
-            # If FTS returned nothing, fall back to vector-only
+            # If FTS returned nothing, fall back to vector-only (no recursion)
             if not fts_results:
                 if vector_results:
-                    return await self.retrieve(
+                    return await self._vector_only_retrieve(
                         query, model=model, limit=limit, source_conv=source_conv,
                     )
                 return ""
@@ -376,10 +378,50 @@ class RAGPipeline:
             return formatted
 
         except Exception as e:
-            logger.warning(f"Hybrid retrieval error, falling back to vector: {e}")
-            return await self.retrieve(
-                query, model=model, limit=limit, source_conv=source_conv,
+            logger.warning(f"Hybrid retrieval error, falling back to vector-only: {e}")
+            try:
+                return await self._vector_only_retrieve(
+                    query, model=model, limit=limit, source_conv=source_conv,
+                )
+            except Exception as ve:
+                logger.error(f"Vector-only fallback also failed: {ve}")
+                return ""
+
+    async def _vector_only_retrieve(
+        self,
+        query: str,
+        model: str = "ollama",
+        limit: int = 5,
+        source_conv: str = "",
+    ) -> str:
+        """Direct vector-only retrieval — no hybrid, no recursion risk.
+
+        Called as fallback from hybrid_retrieve() when FTS fails or is unavailable.
+        Goes directly to _vector_search() and _format_results(), bypassing the
+        retrieve() → hybrid_retrieve() dispatch that can cause infinite recursion.
+        """
+        if not self.is_active:
+            return ""
+
+        start = time.time()
+        try:
+            results = await self._vector_search(query, limit=limit, source_conv=source_conv)
+            if not results:
+                return ""
+
+            max_chars = RAG_CONTEXT_LIMITS.get(model, RAG_CONTEXT_LIMITS["ollama"])
+            formatted = self._format_results(results, max_chars)
+
+            total_ms = int((time.time() - start) * 1000)
+            self._total_retrievals += 1
+            self._total_retrieve_ms += total_ms
+            logger.info(
+                f"RAG vector-only retrieve: {len(results)} results for '{query[:60]}' [{total_ms}ms]"
             )
+            return formatted
+        except Exception as e:
+            logger.error(f"Vector-only retrieve failed: {e}")
+            return ""
 
     async def _vector_search(
         self,
@@ -982,12 +1024,10 @@ class RAGPipeline:
 
         for i, r in enumerate(results):
             text = r.get("text", "")
-            score = r.get("score", 1.0)
-            memory_type = r.get("memory_type", "unknown")
-            relevance = f"{(1 - score) * 100:.0f}%"
 
-            # Format each result
-            section = f"**[{memory_type}]** (relevance: {relevance})\n{text}"
+            # Clean presentation — no meta-labels or relevance scores.
+            # The model should treat these as facts it knows, not citations.
+            section = f"- {text}"
 
             # Check budget
             if total_chars + len(section) + 10 > max_chars:

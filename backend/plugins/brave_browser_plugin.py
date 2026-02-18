@@ -471,9 +471,28 @@ class BraveBrowserPlugin(NexusPlugin):
         try:
             import httpx
 
+            http_error = None
             async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
                 response = await client.get(url)
-                response.raise_for_status()
+
+                # Check for HTTP errors — don't raise yet, try headless fallback first
+                if response.status_code >= 400:
+                    http_error = f"HTTP {response.status_code}"
+                    logger.warning(f"web_fetch got {http_error} for {url}, trying headless fallback")
+
+                    # Try headless browser for pages that block plain HTTP
+                    headless = getattr(self, "_headless_renderer", None)
+                    if headless:
+                        try:
+                            rendered = await headless.render(url, max_chars=8000)
+                            if rendered and len(rendered.strip()) > 100:
+                                logger.info(f"Headless fallback succeeded for {url} (was {http_error})")
+                                return rendered
+                        except Exception as he:
+                            logger.warning(f"Headless fallback also failed for {url}: {he}")
+
+                    # No headless or headless also failed — return error
+                    return f"⚠️ **{url}** returned {http_error}. The site may block automated requests."
 
                 content_type = response.headers.get("content-type", "")
 

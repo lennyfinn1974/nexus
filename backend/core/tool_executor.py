@@ -306,7 +306,7 @@ class ToolExecutor:
             from core.tool_selector import ToolSelector
 
             selector = ToolSelector(all_defs)
-            defs = selector.select_tools(message, max_tools=15)
+            defs = selector.select_tools(message, max_tools=5)
 
             # Boost: ensure @skill actions are included
             if boost_skill_ids:

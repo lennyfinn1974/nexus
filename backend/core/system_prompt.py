@@ -63,7 +63,19 @@ def build_system_prompt(
     kg_context: str = "",
     bulletin_context: str = "",
 ) -> str:
-    """Build the full system prompt from config, plugins, and tool mode."""
+    """Build the full system prompt from config, plugins, and tool mode.
+
+    Architecture (Feb 2026 — "System Prompt Diet"):
+        For Ollama, the system prompt is kept ULTRA-lean (< 500 chars) to
+        preserve native function calling.  All context (RAG, KG, memory,
+        bulletin) is returned separately via ``build_context_messages()``
+        and injected as regular messages in the conversation array.  This
+        keeps the system prompt under the ~2000-char cliff where qwen3-coder
+        drops native tool calling and falls back to text-based XML.
+
+        For Claude/Claude Code, context is still injected into the system
+        prompt (200K context handles it without degradation).
+    """
     name = cfg.agent_name if cfg else "Nexus"
     custom = cfg.custom_system_prompt if cfg else ""
     tone = cfg.persona_tone if cfg else "balanced"
@@ -84,14 +96,17 @@ def build_system_prompt(
     }
     current_model = model_labels.get(model, model)
 
-    # Ollama gets a lean prompt to preserve native tool calling.
-    # qwen3-coder loses native function calling with prompts > ~2000 chars
-    # and falls back to text-based XML tool calls. Keep it minimal.
+    # ── Ollama: ULTRA-LEAN system prompt ──
+    # qwen3-coder loses native function calling with prompts > ~2000 chars.
+    # Keep system prompt < 500 chars.  ALL context (RAG, KG, memory) goes
+    # into the conversation messages instead (via build_context_messages).
     if model == "ollama":
-        prompt = f"""You are {name}, an AI assistant with real tool capabilities.
-{current_datetime}. {tone_instruction}
-Call tools immediately when they can answer the user's question. Be direct and concise.
-After tool results arrive, synthesise them into a clear answer."""
+        prompt = (
+            f"You are {name}, an AI assistant. {current_datetime}."
+            f"{(' ' + tone_instruction) if tone_instruction else ''}\n"
+            "Use tools for real-time data (weather, search, time). "
+            "Be direct and concise."
+        )
     else:
         prompt = f"""You are **{name}**, an autonomous AI agent running on the Nexus platform. You are helpful, capable, and direct.
 Your name is {name} — always use this name when introducing yourself. Nexus is your platform, not your name.
@@ -215,35 +230,43 @@ so you can chain actions: read a file, modify it, test it, etc.
 the results. Don't just dump raw tool output on the user."""
 
     if custom:
-        prompt += f"\n\nAdditional instructions:\n{custom}"
+        if model == "ollama":
+            # For Ollama, only include short custom instructions
+            if len(custom) <= 200:
+                prompt += f"\n{custom}"
+        else:
+            prompt += f"\n\nAdditional instructions:\n{custom}"
 
-    # For Ollama, cap total context injection to keep prompt under ~1500 chars.
-    # qwen3-coder loses native tool calling with prompts > ~2000 chars.
-    max_context_chars = 500 if model == "ollama" else 10000
+    # ── Context injection: Ollama vs Claude ──
+    # For Ollama: NO context in system prompt.  Context goes into
+    # conversation messages via build_context_messages() — called
+    # separately by AgentRunner.
+    # For Claude/Claude Code: inject everything into system prompt
+    # (200K context handles it without tool-calling degradation).
+    if model != "ollama":
+        max_context_chars = 10000
 
-    # Inject passive memory context (learned preferences + project context)
-    if memory_context:
-        mem_text = memory_context[:max_context_chars]
-        prompt += f"\n\nAbout the user:\n{mem_text}"
+        if memory_context:
+            mem_text = memory_context[:max_context_chars]
+            prompt += f"\n\nAbout the user:\n{mem_text}"
 
-    # Inject RAG context (retrieved relevant memories)
-    if rag_context:
-        remaining = max(0, max_context_chars - len(memory_context or ""))
-        if remaining > 100:
-            rag_text = rag_context[:remaining]
-            prompt += f"\n\nRelevant context:\n{rag_text}"
+        if rag_context:
+            remaining = max(0, max_context_chars - len(memory_context or ""))
+            if remaining > 100:
+                rag_text = rag_context[:remaining]
+                prompt += (
+                    "\n\nThings you know (use this knowledge naturally — "
+                    "don't mention where it came from):\n" + rag_text
+                )
 
-    # Inject Knowledge Graph context (related entities)
-    if kg_context:
-        if model != "ollama":  # Skip KG for Ollama to save space
+        if kg_context:
             prompt += f"\n\n{kg_context}"
 
-    # Inject Memory Bulletin (persistent knowledge digest)
-    if bulletin_context:
-        remaining_budget = max(0, max_context_chars - len(memory_context or "") - len(rag_context or ""))
-        if remaining_budget > 200:
-            bulletin_text = bulletin_context[:remaining_budget]
-            prompt += f"\n\nKnowledge digest:\n{bulletin_text}"
+        if bulletin_context:
+            remaining_budget = max(0, max_context_chars - len(memory_context or "") - len(rag_context or ""))
+            if remaining_budget > 200:
+                bulletin_text = bulletin_context[:remaining_budget]
+                prompt += f"\n\nKnowledge digest:\n{bulletin_text}"
 
     # In legacy mode, append text-based tool descriptions from plugins.
     # In native mode, skip this — tool definitions are sent via the API.
@@ -253,3 +276,60 @@ the results. Don't just dump raw tool output on the user."""
             prompt += f"\n\n{plugin_prompt}"
 
     return prompt
+
+
+# ── Ollama Context Messages ────────────────────────────────────────
+# Instead of bloating the system prompt, RAG/KG/memory/bulletin context
+# is injected as a separate message in the conversation array.  This
+# keeps the system prompt lean while still providing the model with all
+# the knowledge it needs.
+
+OLLAMA_CONTEXT_BUDGET = 800  # chars (~200 tokens) — tighter budget for faster TTFT
+
+
+def build_context_messages(
+    memory_context: str = "",
+    rag_context: str = "",
+    kg_context: str = "",
+    bulletin_context: str = "",
+) -> list[dict]:
+    """Build context injection messages for Ollama's conversation array.
+
+    Returns a list of messages (0 or 1) to insert before the last user
+    message.  The context is formatted as an assistant message with a
+    clear knowledge header so the model treats it as its own knowledge.
+    """
+    parts: list[str] = []
+    budget = OLLAMA_CONTEXT_BUDGET
+
+    # Priority order: KG facts > RAG memories > bulletin > passive memory
+    # KG is most structured and highest-signal for personal facts
+    if kg_context:
+        chunk = kg_context[:min(400, budget)]
+        parts.append(chunk)
+        budget -= len(chunk)
+
+    if rag_context and budget > 100:
+        chunk = rag_context[:budget]
+        parts.append(chunk)
+        budget -= len(chunk)
+
+    if bulletin_context and budget > 100:
+        chunk = bulletin_context[:budget]
+        parts.append(chunk)
+        budget -= len(chunk)
+
+    if memory_context and budget > 50:
+        chunk = memory_context[:budget]
+        parts.append(chunk)
+        budget -= len(chunk)
+
+    if not parts:
+        return []
+
+    # Format as a system message with clear knowledge framing
+    context_text = "\n".join(parts)
+    return [{
+        "role": "system",
+        "content": f"[Knowledge context — use naturally, don't cite sources]\n{context_text}",
+    }]

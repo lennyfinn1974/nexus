@@ -105,7 +105,7 @@ export default function ModelsPage() {
           sub={data?.claude_model}
         />
         <StatCard
-          label="Ollama"
+          label={data?.ollama_backend === 'llama_server' ? 'llama-server' : 'Ollama'}
           value={<span className={data?.ollama_available ? 'text-success' : 'text-destructive'}>{data?.ollama_available ? 'Online' : 'Offline'}</span>}
           sub={data?.ollama_model}
         />
@@ -159,9 +159,16 @@ export default function ModelsPage() {
         </CardContent>
       </Card>
 
-      {/* Ollama Config */}
+      {/* Local Model Config */}
       <Card className="border-border bg-card">
-        <CardHeader><CardTitle className="text-sm">Ollama (Local)</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle className="text-sm">
+            {data?.ollama_backend === 'llama_server' ? 'llama-server (Local)' : 'Ollama (Local)'}
+            {data?.ollama_backend === 'llama_server' && (
+              <span className="ml-2 text-[10px] font-normal text-muted-foreground">llama.cpp backend auto-detected</span>
+            )}
+          </CardTitle>
+        </CardHeader>
         <CardContent className="space-y-4">
           <div>
             <Label className="text-xs">Server URL</Label>

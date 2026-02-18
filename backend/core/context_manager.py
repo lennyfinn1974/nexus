@@ -18,8 +18,12 @@ from typing import Any, Optional
 
 logger = logging.getLogger("nexus.context")
 
-# Number of recent messages to keep in the context window
-RECENT_WINDOW = 20
+# Number of recent messages to keep in the context window.
+# Model-aware: Ollama gets fewer (saves ~600 tokens per turn, ~3s TTFT).
+# Claude's 200K context can handle the full window without performance impact.
+RECENT_WINDOW_OLLAMA = 8   # ~800 tokens (4 exchanges)
+RECENT_WINDOW_CLAUDE = 20  # ~2000 tokens (10 exchanges)
+RECENT_WINDOW = 20  # Default (backward compat for callers that don't specify model)
 # Threshold: when message count exceeds this, generate a summary
 SUMMARY_THRESHOLD = 30
 # How many new messages beyond the last summary before we regenerate
@@ -97,25 +101,90 @@ def get_context_limit(model: str) -> int:
     return MODEL_CONTEXT_LIMITS.get(model, 32_000)
 
 
+# ── Message Trimming (Ollama) ─────────────────────────────────────────
+# Long assistant messages in history are the biggest token drain.
+# A single assistant response can be 2000+ chars (~500 tokens).
+# For Ollama's 32K context, we trim each message to keep total history lean.
+
+# Max chars per message in history (Ollama only)
+_MSG_MAX_CHARS_USER_OLLAMA = 400    # User messages are usually short anyway
+_MSG_MAX_CHARS_ASSIST_OLLAMA = 600  # Trim long assistant responses aggressively
+
+
+def _trim_messages_for_ollama(messages: list[dict]) -> list[dict]:
+    """Trim individual message content for Ollama's tight context budget.
+
+    Truncates long messages while preserving the start and end of content
+    (head + tail split) so the model sees both the topic and the conclusion.
+    The last user message is never trimmed (it's the current query).
+    """
+    if not messages:
+        return messages
+
+    trimmed = []
+    for i, msg in enumerate(messages):
+        content = msg.get("content", "")
+        role = msg.get("role", "user")
+
+        # Never trim the last message (current user query)
+        if i == len(messages) - 1:
+            trimmed.append(msg)
+            continue
+
+        # Never trim system messages (summaries, context injection)
+        if role == "system":
+            trimmed.append(msg)
+            continue
+
+        max_chars = (
+            _MSG_MAX_CHARS_USER_OLLAMA if role == "user"
+            else _MSG_MAX_CHARS_ASSIST_OLLAMA
+        )
+
+        if isinstance(content, str) and len(content) > max_chars:
+            # Head/tail split: keep 70% head + 30% tail with ellipsis
+            head_len = int(max_chars * 0.7)
+            tail_len = max_chars - head_len - 5  # 5 for "\n...\n"
+            trimmed_content = content[:head_len] + "\n...\n" + content[-tail_len:]
+            trimmed.append({"role": role, "content": trimmed_content})
+        else:
+            trimmed.append(msg)
+
+    return trimmed
+
+
 async def build_conversation_context(
     db: Any,
     conv_id: str,
     new_user_message: str,
     model_router: Any = None,
     system_prompt: str = "",
+    model: str = "",
 ) -> list[dict]:
     """Build the messages list for the AI model.
 
     Returns a list of message dicts ready to send to the model.
     If the conversation is long enough, prepends a summary of older
     messages as the first user/assistant exchange.
+
+    The ``model`` parameter controls the history window size:
+    Ollama (local) gets 8 messages to minimize prompt tokens and TTFT.
+    Claude/Claude Code get 20 messages (200K context handles it fine).
     """
+    # Model-aware history window
+    if model == "ollama":
+        window = RECENT_WINDOW_OLLAMA
+    elif model in ("claude", "claude_code"):
+        window = RECENT_WINDOW_CLAUDE
+    else:
+        window = RECENT_WINDOW
+
     total_count = await db.get_message_count(conv_id)
-    history = await db.get_conversation_messages(conv_id, limit=RECENT_WINDOW)
+    history = await db.get_conversation_messages(conv_id, limit=window)
     messages: list[dict] = []
 
     # If conversation is long, try to prepend a summary
-    if total_count > RECENT_WINDOW:
+    if total_count > window:
         summary = await db.get_conversation_summary(conv_id)
         if summary:
             messages.append({
@@ -140,6 +209,18 @@ async def build_conversation_context(
     # Append the new user message (if not already in history from DB)
     if new_user_message:
         messages.append({"role": "user", "content": new_user_message})
+
+    # Trim long messages for Ollama to keep total tokens lean.
+    # This is the last step so it applies to all messages including summary.
+    if model == "ollama":
+        before_tokens = estimate_messages_tokens(messages)
+        messages = _trim_messages_for_ollama(messages)
+        after_tokens = estimate_messages_tokens(messages)
+        if before_tokens != after_tokens:
+            logger.info(
+                f"Ollama message trimming: {before_tokens}→{after_tokens} tokens "
+                f"(saved {before_tokens - after_tokens})"
+            )
 
     return messages
 

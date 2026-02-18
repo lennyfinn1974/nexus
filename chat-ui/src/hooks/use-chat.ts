@@ -14,6 +14,7 @@ export function useChat() {
   const [activeWorkCount, setActiveWorkCount] = useState(0)
   const [claudeSessions, setClaudeSessions] = useState<Record<string, ClaudeSessionState>>({})
   const streamContentRef = useRef('')
+  const queuedMessageRef = useRef<string | null>(null)
 
   // Refs for values that callbacks need without causing re-render cycles
   const currentConvIdRef = useRef(currentConvId)
@@ -59,6 +60,11 @@ export function useChat() {
 
   const handleWSMessage = useCallback((msg: WSMessage) => {
     switch (msg.type) {
+      case 'thinking':
+        // Instant feedback — show typing indicator before LLM inference starts
+        setIsStreaming(true)
+        break
+
       case 'stream_start':
         setIsStreaming(true)
         setStreamingModel(msg.model ?? null)
@@ -101,6 +107,17 @@ export function useChat() {
           )
         }
         loadConversations()
+
+        // Dispatch queued message if the user typed ahead while streaming
+        if (queuedMessageRef.current) {
+          const queued = queuedMessageRef.current
+          queuedMessageRef.current = null
+          // Small delay so the UI settles before the next stream starts
+          setTimeout(() => {
+            sendRef.current({ type: 'chat', text: queued })
+            setIsStreaming(true) // Show thinking indicator for queued message
+          }, 100)
+        }
         break
 
       case 'message':
@@ -342,7 +359,7 @@ export function useChat() {
   // ── Actions ──
 
   const sendMessage = useCallback((content: string) => {
-    if (!content.trim() || isStreaming) return
+    if (!content.trim()) return
 
     // Clear any previous orchestration state
     setOrchestration(null)
@@ -350,8 +367,13 @@ export function useChat() {
     // Add user message to UI immediately
     setMessages(prev => [...prev, { role: 'user', content }])
 
-    // Send via WebSocket — backend expects "text" field, not "content"
-    send({ type: 'chat', text: content })
+    if (isStreaming) {
+      // Queue the message — it will fire when the current stream ends
+      queuedMessageRef.current = content
+    } else {
+      // Send via WebSocket — backend expects "text" field, not "content"
+      send({ type: 'chat', text: content })
+    }
   }, [isStreaming, send])
 
   const sendToSession = useCallback((sessionId: string, text: string) => {

@@ -46,6 +46,18 @@ CATEGORY_PATTERNS: dict[str, list[tuple[str, int]]] = {
         (r"\b(what (we|did we)|we (talked|discussed|covered|went over))\b", 3),
         (r"\b(go back to|return to|pick up where)\b", 3),
         (r"\b(those|the|that|these) (questions?|topics?|things?|items?)\b", 2),
+        # Meta-questions about the agent / performance / system
+        (r"\b(you seem|you('re| are) (slow|fast|different|broken|wrong))\b", 3),
+        (r"\b(what('s| is| has) (changed|different|wrong|happening|going on))\b", 3),
+        (r"\b(why (are|is|did) you)\b", 3),
+        (r"\b(your (response|speed|performance|answer|behavior))\b", 3),
+        (r"\b(are you (ok|working|broken|there|alive|listening))\b", 4),
+        (r"\b(what (can|do) you do)\b", 3),
+        (r"\b(how (long|fast|slow))\b.*\b(take|respond|answer)\b", 3),
+        # Short conversational fragments
+        (r"^(really|seriously|wow|huh|interesting|cool|nice|great|hmm|lol)\b", 3),
+        (r"^(i think|i feel|i want|i need|i was|i am)\b", 2),
+        (r"\b(help me|assist me|guide me)\b", 2),
     ],
     "web": [
         (r"\b(google|find online|web search|browse the web|look up online)\b", 2),
@@ -53,7 +65,7 @@ CATEGORY_PATTERNS: dict[str, list[tuple[str, int]]] = {
         (r"\bhttps?://", 3),
         (r"\bwww\.", 3),
         (r"\b(news|article|blog post|webpage)\b", 1),
-        (r"\b(weather|forecast|temperature)\b", 2),
+        (r"\b(weather|forecast|temperature)\b", 4),
         (r"\b(research|find information|look up)\b", 1),
     ],
     "system": [
@@ -136,8 +148,10 @@ CORE_TOOL_NAMES: list[str] = [
     "brave__web_fetch",
 ]
 
-# When no category matches, fall back to these categories.
-DEFAULT_CATEGORIES = ["web"]
+# When no category matches, fall back to chat (no tools).
+# Most unmatched prompts are conversational — defaulting to "web"
+# caused unnecessary tool injection that confused the model.
+DEFAULT_CATEGORIES = ["chat"]
 
 
 class ToolSelector:
@@ -181,37 +195,35 @@ class ToolSelector:
     def select_tools(
         self,
         message: str,
-        max_tools: int = 15,
+        max_tools: int = 5,
     ) -> list[ToolDefinition]:
         """Select the most relevant tools for *message*.
 
-        Strategy
-        --------
-        1. If "chat" is primary intent, return NO tools (streaming mode, fastest).
-           RAG context already provides relevant memory — no tools needed.
-        2. If "memory" is primary (without web co-intent), return NO tools.
-           Memory-recall queries are answered via RAG context injection;
-           adding web search tools causes the model to second-guess correct
-           answers by searching the web and getting confused when it finds
-           nothing (e.g. small local businesses not indexed).
-        3. Always include CORE_TOOL_NAMES (2 web tools) for other intents.
-        4. Primary category → all its tools (up to 10).
-        5. Secondary categories → top 3 tools each.
-        6. Cap at *max_tools*.
+        Strategy (Feb 2026 — "System Prompt Diet" / lean tool set)
+        -----------------------------------------------------------
+        1. If "chat" is primary intent (no web co-intent), return NO tools.
+        2. If "memory" is primary (no web co-intent), return NO tools.
+        3. Always include CORE_TOOL_NAMES (google_search + web_fetch).
+        4. Primary category → up to 3 additional tools.
+        5. Secondary categories → 1 tool each.
+        6. Hard cap at *max_tools* (default 5 — optimized for Ollama).
+
+        With max_tools=5, a typical selection looks like:
+            [google_search, web_fetch, <primary_1>, <primary_2>, <secondary_1>]
+        This is enough for any single-intent query while keeping the tool
+        schema small enough for reliable native function calling.
         """
         # 1. Classify intent first
         categories = self.classify_intent(message)
         logger.info(f"Tool selection — intent: {categories}")
 
         # Chat-primary intent: no tools → Ollama uses fast streaming path
-        if categories and categories[0] == "chat":
+        # BUT if web is also detected (e.g. "what is the weather"), keep tools
+        if categories and categories[0] == "chat" and "web" not in categories:
             logger.info("Selected 0 tools: chat intent (no tools needed)")
             return []
 
         # Memory-primary intent without explicit web need: no tools.
-        # RAG already injected relevant memories into the context —
-        # giving the model web search tools causes it to "verify"
-        # personal facts on the web, which fails and confuses it.
         if categories and categories[0] == "memory" and "web" not in categories:
             logger.info("Selected 0 tools: memory intent (RAG handles recall)")
             return []
@@ -219,22 +231,21 @@ class ToolSelector:
         selected: dict[str, ToolDefinition] = {}
 
         # 2. Core essentials (web search + fetch) — skip when memory is primary
-        #    even with web co-intent, let category tools dominate
         if not (categories and categories[0] == "memory"):
             for tool_name in CORE_TOOL_NAMES:
                 if tool_name in self._by_name:
                     selected[tool_name] = self._by_name[tool_name]
 
-        # 3. Fill from matched categories
+        # 3. Fill from matched categories — tighter budgets for lean tool set
         for i, category in enumerate(categories):
             tools_in_cat = self._by_category.get(category, [])
 
             if i == 0:
-                # Primary category — include everything (up to remaining budget)
-                limit = min(10, max_tools - len(selected))
-            else:
-                # Secondary categories — include top 3
+                # Primary category — up to 3 additional tools
                 limit = min(3, max_tools - len(selected))
+            else:
+                # Secondary categories — 1 tool each
+                limit = min(1, max_tools - len(selected))
 
             for tool in tools_in_cat[:limit]:
                 full_name = f"{tool.plugin}__{tool.name}"

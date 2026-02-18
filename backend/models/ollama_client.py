@@ -1,8 +1,15 @@
-"""Ollama API client with tool calling support for compatible models.
+"""Local model API client with tool calling support.
 
-Uses the OpenAI-compatible /v1/chat/completions endpoint for tool calls
-(more reliable, matches OpenClaw's approach) and native /api/chat for
-regular streaming (lower latency).
+Supports both Ollama and llama-server (llama.cpp) backends transparently.
+Both expose OpenAI-compatible /v1/chat/completions endpoints.
+
+Backend auto-detection:
+  - Ollama: /api/tags returns model list, also has /api/chat (native)
+  - llama-server: /health returns {"status":"ok"}, /v1 only
+
+When talking to llama-server, ALL requests go through /v1/chat/completions
+(including no-tools streaming).  When talking to Ollama, no-tools requests
+can optionally use /api/chat for lower latency.
 """
 
 from __future__ import annotations
@@ -18,19 +25,30 @@ logger = logging.getLogger("nexus.ollama")
 
 
 class OllamaClient:
-    """Client for Ollama's local API."""
+    """Client for local model APIs (Ollama or llama-server)."""
 
     def __init__(self, base_url: str = "http://localhost:11434", model: str = "qwen3-coder:30b"):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self._client = httpx.AsyncClient(base_url=self.base_url, timeout=120.0)
         self._supports_tools: bool | None = None
+        # Backend type: "ollama", "llama_server", or None (unknown)
+        self._backend: str | None = None
+
+    @property
+    def is_llama_server(self) -> bool:
+        """True if connected to llama-server instead of Ollama."""
+        return self._backend == "llama_server"
 
     @property
     def supports_tools(self) -> bool:
         """Check if the current model supports native tool calling."""
         if self._supports_tools is not None:
             return self._supports_tools
+        # llama-server with --jinja always supports tools
+        if self.is_llama_server:
+            self._supports_tools = True
+            return True
         # Models known to support tool calling
         tool_capable = [
             "llama3.1",
@@ -49,19 +67,44 @@ class OllamaClient:
         return self._supports_tools
 
     async def is_available(self) -> bool:
-        """Check if Ollama is running and the model is accessible."""
+        """Check if the local model server is running.
+
+        Auto-detects whether we're talking to Ollama or llama-server:
+          - Try /health first (llama-server) — returns {"status":"ok"}
+          - Fall back to /api/tags (Ollama) — returns model list
+        """
+        # Try llama-server health endpoint first
         try:
-            resp = await self._client.get("/api/tags")
+            resp = await self._client.get("/health", timeout=5.0)
             if resp.status_code == 200:
+                data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+                if data.get("status") == "ok":
+                    if self._backend != "llama_server":
+                        self._backend = "llama_server"
+                        self._supports_tools = True  # Reset — llama-server always supports tools
+                        logger.info(f"Detected llama-server backend at {self.base_url}")
+                    return True
+        except (httpx.ConnectError, httpx.TimeoutException, Exception):
+            pass
+
+        # Try Ollama /api/tags
+        try:
+            resp = await self._client.get("/api/tags", timeout=5.0)
+            if resp.status_code == 200:
+                if self._backend != "ollama":
+                    self._backend = "ollama"
+                    self._supports_tools = None  # Reset — re-check for Ollama
+                    logger.info(f"Detected Ollama backend at {self.base_url}")
                 models = resp.json().get("models", [])
                 available = [m["name"] for m in models]
                 if self.model in available or ":cloud" in self.model:
                     return True
                 logger.warning(f"Model '{self.model}' not found. Available: {available}")
                 return len(available) > 0
-            return False
         except (httpx.ConnectError, httpx.TimeoutException):
-            return False
+            pass
+
+        return False
 
     async def chat(
         self,
@@ -73,8 +116,14 @@ class OllamaClient:
 
         Uses /v1/chat/completions (OpenAI-compatible) when tools are present
         for more reliable tool calling. Falls back to /api/chat otherwise.
+
+        When connected to llama-server, ALL requests use /v1 (no /api/chat).
         """
         use_tools = bool(tools and self.supports_tools)
+
+        # llama-server: always use /v1
+        if self.is_llama_server:
+            return await self._chat_v1(messages, system, tools if use_tools else None)
 
         if use_tools:
             return await self._chat_v1(messages, system, tools)
@@ -192,13 +241,16 @@ class OllamaClient:
         Uses /v1/chat/completions with SSE streaming for both tool-calling
         and synthesis (tool-result) modes.  Falls back to /api/chat (native
         Ollama streaming) when no tools are involved for lowest latency.
+
+        When connected to llama-server, ALL streaming uses /v1 (no /api/chat).
         """
         use_tools = bool(tools and self.supports_tools)
 
         # Check if messages contain tool-formatted content that requires /v1
         has_tool_messages = any(m.get("role") == "tool" for m in messages)
 
-        if use_tools or has_tool_messages:
+        # llama-server: always use /v1 streaming (no /api/chat endpoint)
+        if use_tools or has_tool_messages or self.is_llama_server:
             # SSE streaming via /v1 — streams text chunks AND collects tool calls
             synthesis_mode = has_tool_messages and not use_tools
             try:

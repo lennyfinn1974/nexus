@@ -34,6 +34,7 @@ export interface ModelsResponse {
   ollama_model: string
   ollama_base_url: string
   ollama_available: boolean
+  ollama_backend?: string  // "ollama" | "llama_server"
   claude_model: string
   claude_available: boolean
   claude_code_available: boolean

@@ -7,6 +7,11 @@
     <!-- Load:    launchctl load ~/Library/LaunchAgents/com.nexus.agent.plist -->
     <!-- Unload:  launchctl unload ~/Library/LaunchAgents/com.nexus.agent.plist -->
     <!-- Status:  launchctl list | grep nexus -->
+    <!--
+         Boot order: Ollama (homebrew.mxcl.ollama) starts first via its own plist.
+         Nexus waits 10s (StartInterval) for Ollama to be ready, then connects.
+         OllamaClient.is_available() auto-detects backend (Ollama or llama-server).
+    -->
 
     <key>Label</key>
     <string>com.nexus.agent</string>
@@ -16,10 +21,9 @@
         <string>/Users/lennyfinn/Nexus/venv/bin/python</string>
         <string>-m</string>
         <string>uvicorn</string>
-        <string>app:create_app</string>
-        <string>--factory</string>
+        <string>main:app</string>
         <string>--host</string>
-        <string>127.0.0.1</string>
+        <string>0.0.0.0</string>
         <string>--port</string>
         <string>8080</string>
     </array>
@@ -41,14 +45,14 @@
     <key>RunAtLoad</key>
     <true/>
 
-    <!-- Restart automatically on crash (5 second throttle) -->
+    <!-- Restart automatically on crash (10 second throttle — gives Ollama time to load) -->
     <key>KeepAlive</key>
     <dict>
         <key>SuccessfulExit</key>
         <false/>
     </dict>
     <key>ThrottleInterval</key>
-    <integer>5</integer>
+    <integer>10</integer>
 
     <!-- Logging -->
     <key>StandardOutPath</key>
@@ -68,7 +72,7 @@
         <integer>8192</integer>
     </dict>
 
-    <!-- Nice level (0 = normal, positive = lower priority) -->
+    <!-- Nice level (0 = normal) -->
     <key>Nice</key>
     <integer>0</integer>
 </dict>

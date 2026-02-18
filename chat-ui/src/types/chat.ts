@@ -40,6 +40,7 @@ export interface StatusData {
 }
 
 export type WSMessageType =
+  | 'thinking'
   | 'stream_start'
   | 'stream_chunk'
   | 'stream_end'
