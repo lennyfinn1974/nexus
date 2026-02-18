@@ -777,6 +777,7 @@ class SubAgentOrchestrator:
                 getattr(self.state, "plugin_manager", None),
                 tool_calling_mode="native",
                 model="claude_code",
+                app_state=self.state,
             )
             if system_addendum:
                 system += f"\n\n{system_addendum}"
@@ -855,6 +856,7 @@ class SubAgentOrchestrator:
             getattr(self.state, "plugin_manager", None),
             tool_calling_mode="native",
             model=model_name,
+            app_state=self.state,
         )
         if system_addendum:
             system += f"\n\n{system_addendum}"

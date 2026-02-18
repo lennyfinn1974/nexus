@@ -20,6 +20,7 @@ const pageTitles: Record<string, string> = {
   '/admin/cluster': 'Agent Cluster',
   '/admin/memory': 'Memory & Knowledge',
   '/admin/metrics': 'Metrics & Observability',
+  '/admin/marketing': 'Marketing',
 }
 
 export default function AppShell({ children }: { children: ReactNode }) {

@@ -511,7 +511,8 @@ async def restart_server():
 async def get_system_prompt():
     from core.system_prompt import build_system_prompt
 
-    prompt = build_system_prompt(_cfg, _plugins)
+    app_state = _get_app_state()
+    prompt = build_system_prompt(_cfg, _plugins, app_state=app_state)
     plugin_additions = _plugins.get_system_prompt_additions() if _plugins else ""
     return JSONResponse(
         {

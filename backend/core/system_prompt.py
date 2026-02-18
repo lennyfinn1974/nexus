@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone, timedelta
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from config_manager import ConfigManager
@@ -53,6 +53,184 @@ def _get_current_datetime(cfg: "ConfigManager | None" = None) -> str:
     return now.strftime(f"%A, %-d %B %Y at %H:%M ({offset_str})")
 
 
+def _get_channel_context(channel: str) -> str:
+    """Return channel-specific context line for the system prompt.
+
+    When the user is on a specific channel (WhatsApp, SMS, voice, etc.),
+    the agent should adapt its behavior accordingly.
+    """
+    if not channel:
+        return ""
+
+    hints = {
+        "websocket": "",
+        "telegram": "**Channel:** Telegram — use Markdown, keep under 4000 chars.",
+        "whatsapp": (
+            "**Channel:** WhatsApp — be concise, use *bold* for emphasis, "
+            "keep under 4000 chars. You can suggest up to 3 button options."
+        ),
+        "sms": (
+            "**Channel:** SMS — be extremely concise (under 300 chars ideally). "
+            "No formatting, no links unless essential. Each message costs money."
+        ),
+        "voice": (
+            "**Channel:** Voice call — speak naturally, 1-3 sentences max. "
+            "No code, no URLs, no formatting. This will be spoken aloud."
+        ),
+        "instagram": "**Channel:** Instagram DM — be casual and friendly, keep concise.",
+    }
+    hint = hints.get(channel.lower(), "")
+    return f"\n{hint}\n" if hint else ""
+
+
+def _build_self_awareness(
+    cfg: "ConfigManager | None" = None,
+    plugin_manager: "PluginManager | None" = None,
+    app_state: Any = None,
+) -> str:
+    """Build a dynamic self-awareness block describing Nexus's current state.
+
+    This gives the LLM full knowledge of what's installed, active, and
+    available — so it can accurately answer questions about its own
+    capabilities instead of saying "I don't know what I have."
+
+    Returns a markdown block suitable for system prompt injection.
+    """
+    sections: list[str] = []
+
+    # ── Platform Identity ──
+    sections.append("## Platform Self-Awareness")
+    sections.append(
+        "You ARE Nexus — a self-hosted AI agent platform. Below is your LIVE "
+        "configuration. Use this to accurately answer questions about your own "
+        "capabilities, installed features, and system status."
+    )
+
+    # ── Model Providers ──
+    models_info: list[str] = []
+    if cfg:
+        ollama_model = cfg.get("OLLAMA_MODEL", "")
+        claude_model = cfg.get("CLAUDE_MODEL", "")
+        cc_enabled = cfg.get_bool("CLAUDE_CODE_ENABLED", False)
+        if ollama_model:
+            models_info.append(f"  - Ollama (local): **{ollama_model}** — primary, runs on device")
+        if claude_model:
+            models_info.append(f"  - Claude API (cloud): **{claude_model}** — cloud fallback")
+        if cc_enabled:
+            cc_model = cfg.get("CLAUDE_CODE_MODEL", "claude-sonnet-4-20250514")
+            models_info.append(f"  - Claude Code (agentic): **{cc_model}** — MCP tools, autonomous")
+    if models_info:
+        sections.append("**Model Providers:**\n" + "\n".join(models_info))
+
+    # ── Active Plugins ──
+    if plugin_manager:
+        active_plugins = []
+        for name, plugin in plugin_manager.plugins.items():
+            if plugin.enabled:
+                tool_count = len(plugin.list_tools()) if hasattr(plugin, 'list_tools') else 0
+                cmd_count = len(plugin.list_commands()) if hasattr(plugin, 'list_commands') else 0
+                desc = getattr(plugin, 'description', '')
+                summary = f"  - **{name}**: {desc}" if desc else f"  - **{name}**"
+                if tool_count:
+                    summary += f" ({tool_count} tools"
+                    if cmd_count:
+                        summary += f", {cmd_count} commands"
+                    summary += ")"
+                active_plugins.append(summary)
+        if active_plugins:
+            sections.append(
+                f"**Active Plugins** ({len(active_plugins)}):\n" + "\n".join(active_plugins)
+            )
+
+    # ── Communication Channels ──
+    if app_state:
+        channels: list[str] = []
+        channel_mgr = getattr(app_state, "channel_manager", None)
+        if channel_mgr:
+            for ch_name, adapter in getattr(channel_mgr, "_adapters", {}).items():
+                status = "active" if getattr(adapter, "_running", False) else "registered"
+                channels.append(f"  - **{ch_name}**: {status}")
+        # Always have WebSocket
+        channels.insert(0, "  - **WebSocket (Chat UI)**: active")
+        if channels:
+            sections.append("**Communication Channels:**\n" + "\n".join(channels))
+
+    # ── Marketing System ──
+    if app_state:
+        marketing_enabled = cfg.get_bool("MARKETING_ENABLED", False) if cfg else False
+        brand_mgr = getattr(app_state, "brand_voice_manager", None)
+        content_wf = getattr(app_state, "content_workflow", None)
+        campaign_mgr = getattr(app_state, "campaign_manager", None)
+        if marketing_enabled and brand_mgr:
+            profile_count = len(getattr(brand_mgr, "_cache", {}))
+            sections.append(
+                f"**Marketing System:** ACTIVE\n"
+                f"  - Brand voice manager: {profile_count} profile(s) loaded\n"
+                f"  - Content workflow: {'ready' if content_wf else 'unavailable'}\n"
+                f"  - Campaign manager: {'ready' if campaign_mgr else 'unavailable'}\n"
+                f"  - Features: brand profiles, campaigns, content workflow (draft→review→approve→schedule→publish), "
+                f"calendar, cross-channel analytics, multi-touch attribution\n"
+                f"  - Admin dashboard: /admin/marketing"
+            )
+        else:
+            sections.append("**Marketing System:** disabled (enable in Settings → Marketing)")
+
+    # ── Memory & Knowledge ──
+    if app_state:
+        mem_parts: list[str] = []
+        if getattr(app_state, "rag_pipeline", None):
+            mem_parts.append("  - RAG pipeline: active (vector search)")
+        if getattr(app_state, "knowledge_graph", None):
+            mem_parts.append("  - Knowledge graph: active (entity relationships)")
+        if getattr(app_state, "memory_bulletin", None):
+            mem_parts.append("  - Memory bulletin: active (periodic knowledge digest)")
+        if getattr(app_state, "embedding_service", None):
+            mem_parts.append("  - Embedding service: active")
+        if mem_parts:
+            sections.append("**Memory & Knowledge:**\n" + "\n".join(mem_parts))
+
+    # ── Clustering ──
+    if app_state:
+        cluster_mgr = getattr(app_state, "cluster_manager", None)
+        if cluster_mgr and getattr(cluster_mgr, "enabled", False):
+            role = getattr(cluster_mgr, "role", "unknown")
+            sections.append(f"**Clustering:** active (role: {role})")
+        else:
+            sections.append("**Clustering:** standalone mode")
+
+    # ── Skills Engine ──
+    if app_state:
+        skills_engine = getattr(app_state, "skills_engine", None)
+        if skills_engine:
+            all_skills = getattr(skills_engine, "skills", {})
+            actions_count = sum(
+                len(getattr(s, "actions", {}))
+                for s in all_skills.values()
+                if hasattr(s, "actions")
+            )
+            sections.append(
+                f"**Skills Engine:** {len(all_skills)} skills loaded, "
+                f"{actions_count} action handlers"
+            )
+
+    # ── Admin Panel ──
+    sections.append(
+        "**Admin Panel:** /admin — full management dashboard with pages for: "
+        "Dashboard, System Health, Security, Monitoring, Users, Models, Settings, "
+        "Plugins, Persona, Skills, Marketing, Metrics, Cluster, Memory, "
+        "Work Streams, Conversations, Logs, System"
+    )
+
+    # ── Task Queue ──
+    if app_state:
+        tq = getattr(app_state, "task_queue", None)
+        if tq:
+            active = getattr(tq, "_active_count", 0)
+            sections.append(f"**Task Queue:** active ({active} running)")
+
+    return "\n\n".join(sections)
+
+
 def build_system_prompt(
     cfg: ConfigManager | None = None,
     plugin_manager: PluginManager | None = None,
@@ -62,6 +240,8 @@ def build_system_prompt(
     rag_context: str = "",
     kg_context: str = "",
     bulletin_context: str = "",
+    channel: str = "",
+    app_state: Any = None,
 ) -> str:
     """Build the full system prompt from config, plugins, and tool mode.
 
@@ -114,7 +294,7 @@ You are the same agent across all channels (chat UI, Telegram, etc.) — same br
 
 **Current date/time:** {current_datetime}
 **Running on:** {current_model}
-
+{_get_channel_context(channel)}
 You have real capabilities -- you can execute code, read and write files, search the web,
 browse pages, control macOS, manage terminal sessions, search documents, and more.
 Use these proactively when they'd help the user. Don't just describe what you'd do -- actually do it.
@@ -237,6 +417,15 @@ the results. Don't just dump raw tool output on the user."""
         else:
             prompt += f"\n\nAdditional instructions:\n{custom}"
 
+    # ── Self-awareness: what is Nexus, what is installed, what can it do ──
+    # For Claude/Claude Code: inject into system prompt (200K handles it).
+    # For Ollama: skip here — injected via build_context_messages() instead
+    # to keep system prompt lean.
+    if model != "ollama":
+        awareness = _build_self_awareness(cfg, plugin_manager, app_state)
+        if awareness:
+            prompt += f"\n\n{awareness}"
+
     # ── Context injection: Ollama vs Claude ──
     # For Ollama: NO context in system prompt.  Context goes into
     # conversation messages via build_context_messages() — called
@@ -287,11 +476,55 @@ the results. Don't just dump raw tool output on the user."""
 OLLAMA_CONTEXT_BUDGET = 800  # chars (~200 tokens) — tighter budget for faster TTFT
 
 
+def _build_ollama_self_awareness(
+    cfg: "ConfigManager | None" = None,
+    plugin_manager: "PluginManager | None" = None,
+    app_state: Any = None,
+) -> str:
+    """Build a CONDENSED self-awareness block for Ollama context messages.
+
+    Must be much shorter than the full Claude version to fit within
+    OLLAMA_CONTEXT_BUDGET alongside RAG/KG context.
+    """
+    parts: list[str] = []
+    name = cfg.agent_name if cfg else "Nexus"
+    parts.append(f"You are {name}, an AI agent on the Nexus platform.")
+
+    # Active capabilities (compact list)
+    caps: list[str] = []
+    if plugin_manager:
+        active_count = sum(1 for p in plugin_manager.plugins.values() if p.enabled)
+        tool_count = sum(len(p.list_tools()) for p in plugin_manager.plugins.values() if p.enabled and hasattr(p, 'list_tools'))
+        caps.append(f"{active_count} plugins ({tool_count} tools)")
+
+    if app_state:
+        if getattr(app_state, "brand_voice_manager", None):
+            caps.append("marketing system")
+        if getattr(app_state, "rag_pipeline", None):
+            caps.append("RAG memory")
+        if getattr(app_state, "knowledge_graph", None):
+            caps.append("knowledge graph")
+        ch_mgr = getattr(app_state, "channel_manager", None)
+        if ch_mgr:
+            ch_names = list(getattr(ch_mgr, "_adapters", {}).keys())
+            if ch_names:
+                caps.append(f"channels: {', '.join(ch_names)}")
+
+    if caps:
+        parts.append(f"Active: {'; '.join(caps)}.")
+    parts.append("Admin panel: /admin. Ask about your own features confidently.")
+
+    return " ".join(parts)
+
+
 def build_context_messages(
     memory_context: str = "",
     rag_context: str = "",
     kg_context: str = "",
     bulletin_context: str = "",
+    cfg: "ConfigManager | None" = None,
+    plugin_manager: "PluginManager | None" = None,
+    app_state: Any = None,
 ) -> list[dict]:
     """Build context injection messages for Ollama's conversation array.
 
@@ -301,6 +534,12 @@ def build_context_messages(
     """
     parts: list[str] = []
     budget = OLLAMA_CONTEXT_BUDGET
+
+    # Self-awareness first (highest priority — agent must know itself)
+    awareness = _build_ollama_self_awareness(cfg, plugin_manager, app_state)
+    if awareness:
+        parts.append(awareness)
+        budget -= len(awareness)
 
     # Priority order: KG facts > RAG memories > bulletin > passive memory
     # KG is most structured and highest-signal for personal facts

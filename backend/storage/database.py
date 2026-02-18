@@ -775,6 +775,821 @@ class Database:
             await session.commit()
             return result.rowcount
 
+    # ── Channel Identities ───────────────────────────────────────────
+
+    async def ensure_channel_identities_table(self) -> None:
+        """Create the channel_identities table if it doesn't exist.
+
+        Links external channel user IDs (Telegram, WhatsApp, SMS, etc.)
+        to a Nexus user identity for cross-channel conversation continuity.
+        """
+        async with self._session_factory() as session:
+            await session.execute(text("""
+                CREATE TABLE IF NOT EXISTS channel_identities (
+                    id SERIAL PRIMARY KEY,
+                    nexus_user_id VARCHAR(128) NOT NULL,
+                    channel VARCHAR(20) NOT NULL,
+                    channel_user_id VARCHAR(128) NOT NULL,
+                    display_name VARCHAR(200),
+                    conversation_id VARCHAR(128),
+                    org_id VARCHAR(64) NOT NULL DEFAULT 'default',
+                    paired_at TIMESTAMPTZ DEFAULT NOW(),
+                    last_active TIMESTAMPTZ DEFAULT NOW(),
+                    metadata JSONB,
+                    UNIQUE(channel, channel_user_id)
+                )
+            """))
+            await session.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_channel_ident_user "
+                "ON channel_identities (nexus_user_id)"
+            ))
+            await session.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_channel_ident_channel "
+                "ON channel_identities (channel, channel_user_id)"
+            ))
+            await session.commit()
+        logger.info("Ensured channel_identities table exists")
+
+    async def upsert_channel_identity(
+        self,
+        nexus_user_id: str,
+        channel: str,
+        channel_user_id: str,
+        display_name: str = "",
+        org_id: str = DEFAULT_ORG,
+    ) -> dict:
+        """Create or update a channel identity link."""
+        now = datetime.now(timezone.utc)
+        async with self._session_factory() as session:
+            await session.execute(text("""
+                INSERT INTO channel_identities
+                    (nexus_user_id, channel, channel_user_id, display_name, org_id, paired_at, last_active)
+                VALUES (:nexus_user_id, :channel, :channel_user_id, :display_name, :org_id, :now, :now)
+                ON CONFLICT (channel, channel_user_id) DO UPDATE SET
+                    nexus_user_id = EXCLUDED.nexus_user_id,
+                    display_name = COALESCE(EXCLUDED.display_name, channel_identities.display_name),
+                    last_active = :now
+            """), {
+                "nexus_user_id": nexus_user_id,
+                "channel": channel,
+                "channel_user_id": channel_user_id,
+                "display_name": display_name or None,
+                "org_id": org_id,
+                "now": now,
+            })
+            await session.commit()
+        return {
+            "nexus_user_id": nexus_user_id,
+            "channel": channel,
+            "channel_user_id": channel_user_id,
+        }
+
+    async def get_channel_identity(
+        self, channel: str, channel_user_id: str
+    ) -> Optional[dict]:
+        """Look up a channel identity by channel type and channel-specific user ID."""
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                SELECT nexus_user_id, channel, channel_user_id, display_name,
+                       conversation_id, org_id, paired_at, last_active
+                FROM channel_identities
+                WHERE channel = :channel AND channel_user_id = :channel_user_id
+            """), {"channel": channel, "channel_user_id": channel_user_id})
+            row = result.mappings().first()
+            return dict(row) if row else None
+
+    async def get_user_channel_identities(self, nexus_user_id: str) -> list[dict]:
+        """Get all channel identities linked to a Nexus user."""
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                SELECT nexus_user_id, channel, channel_user_id, display_name,
+                       conversation_id, org_id, paired_at, last_active
+                FROM channel_identities
+                WHERE nexus_user_id = :nexus_user_id
+                ORDER BY last_active DESC
+            """), {"nexus_user_id": nexus_user_id})
+            return [dict(r) for r in result.mappings().all()]
+
+    async def get_channel_conversation(
+        self, channel: str, channel_user_id: str
+    ) -> Optional[str]:
+        """Get the active conversation ID for a channel user."""
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                SELECT conversation_id FROM channel_identities
+                WHERE channel = :channel AND channel_user_id = :channel_user_id
+            """), {"channel": channel, "channel_user_id": channel_user_id})
+            row = result.scalar_one_or_none()
+            return row if row else None
+
+    async def set_channel_conversation(
+        self, channel: str, channel_user_id: str, conv_id: str
+    ) -> None:
+        """Set the active conversation for a channel user."""
+        now = datetime.now(timezone.utc)
+        async with self._session_factory() as session:
+            await session.execute(text("""
+                UPDATE channel_identities
+                SET conversation_id = :conv_id, last_active = :now
+                WHERE channel = :channel AND channel_user_id = :channel_user_id
+            """), {
+                "conv_id": conv_id,
+                "channel": channel,
+                "channel_user_id": channel_user_id,
+                "now": now,
+            })
+            await session.commit()
+
+    async def remove_channel_identity(
+        self, channel: str, channel_user_id: str
+    ) -> bool:
+        """Remove a channel identity link. Returns True if a row was deleted."""
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                DELETE FROM channel_identities
+                WHERE channel = :channel AND channel_user_id = :channel_user_id
+            """), {"channel": channel, "channel_user_id": channel_user_id})
+            await session.commit()
+            return result.rowcount > 0
+
+    # ── Marketing Tables ─────────────────────────────────────────────
+
+    async def ensure_marketing_tables(self) -> None:
+        """Create all marketing tables if they don't exist.
+
+        Tables: brand_profiles, campaigns, content_items, calendar_events,
+        marketing_metrics, platform_connections.
+        """
+        async with self._session_factory() as session:
+            # Brand voice profiles
+            await session.execute(text("""
+                CREATE TABLE IF NOT EXISTS brand_profiles (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(100) NOT NULL,
+                    tone VARCHAR(50),
+                    vocabulary_rules JSONB,
+                    examples JSONB,
+                    platform_guidelines JSONB,
+                    is_default BOOLEAN DEFAULT FALSE,
+                    org_id VARCHAR(64) NOT NULL DEFAULT 'default',
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+
+            # Marketing campaigns
+            await session.execute(text("""
+                CREATE TABLE IF NOT EXISTS campaigns (
+                    id VARCHAR(128) PRIMARY KEY,
+                    name VARCHAR(200) NOT NULL,
+                    status VARCHAR(20) DEFAULT 'planning',
+                    campaign_type VARCHAR(30),
+                    budget_usd DECIMAL(10,2),
+                    spent_usd DECIMAL(10,2) DEFAULT 0,
+                    start_date DATE,
+                    end_date DATE,
+                    goals JSONB,
+                    strategy TEXT,
+                    brand_profile_id INTEGER,
+                    org_id VARCHAR(64) NOT NULL DEFAULT 'default',
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            await session.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_campaigns_status "
+                "ON campaigns (status)"
+            ))
+            await session.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_campaigns_org "
+                "ON campaigns (org_id)"
+            ))
+
+            # Content items (posts, emails, ads)
+            await session.execute(text("""
+                CREATE TABLE IF NOT EXISTS content_items (
+                    id VARCHAR(128) PRIMARY KEY,
+                    campaign_id VARCHAR(128),
+                    content_type VARCHAR(30) NOT NULL,
+                    platform VARCHAR(30),
+                    status VARCHAR(20) DEFAULT 'draft',
+                    title VARCHAR(200),
+                    body TEXT,
+                    media_urls JSONB,
+                    scheduled_at TIMESTAMPTZ,
+                    published_at TIMESTAMPTZ,
+                    external_id VARCHAR(100),
+                    metrics JSONB,
+                    brand_profile_id INTEGER,
+                    created_by VARCHAR(50),
+                    approved_by VARCHAR(50),
+                    org_id VARCHAR(64) NOT NULL DEFAULT 'default',
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+            await session.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_content_items_status "
+                "ON content_items (status)"
+            ))
+            await session.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_content_items_campaign "
+                "ON content_items (campaign_id)"
+            ))
+            await session.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_content_items_scheduled "
+                "ON content_items (scheduled_at) WHERE status = 'scheduled'"
+            ))
+
+            # Calendar events (unified content calendar)
+            await session.execute(text("""
+                CREATE TABLE IF NOT EXISTS calendar_events (
+                    id SERIAL PRIMARY KEY,
+                    campaign_id VARCHAR(128),
+                    content_item_id VARCHAR(128),
+                    event_type VARCHAR(20) NOT NULL,
+                    title VARCHAR(200),
+                    scheduled_at TIMESTAMPTZ NOT NULL,
+                    completed_at TIMESTAMPTZ,
+                    org_id VARCHAR(64) NOT NULL DEFAULT 'default'
+                )
+            """))
+            await session.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_calendar_events_date "
+                "ON calendar_events (scheduled_at)"
+            ))
+
+            # Marketing metrics (time-series)
+            await session.execute(text("""
+                CREATE TABLE IF NOT EXISTS marketing_metrics (
+                    id SERIAL PRIMARY KEY,
+                    source VARCHAR(30) NOT NULL,
+                    metric_name VARCHAR(50) NOT NULL,
+                    metric_value DECIMAL(12,4),
+                    dimensions JSONB,
+                    recorded_at TIMESTAMPTZ NOT NULL,
+                    org_id VARCHAR(64) NOT NULL DEFAULT 'default'
+                )
+            """))
+            await session.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_marketing_metrics_source "
+                "ON marketing_metrics (source, metric_name)"
+            ))
+            await session.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_marketing_metrics_time "
+                "ON marketing_metrics (recorded_at)"
+            ))
+
+            # Platform connections (OAuth tokens for Ayrshare, Mailchimp, etc.)
+            await session.execute(text("""
+                CREATE TABLE IF NOT EXISTS platform_connections (
+                    id SERIAL PRIMARY KEY,
+                    platform VARCHAR(30) NOT NULL,
+                    account_name VARCHAR(100),
+                    credentials_encrypted TEXT,
+                    scopes JSONB,
+                    status VARCHAR(20) DEFAULT 'active',
+                    last_refreshed_at TIMESTAMPTZ,
+                    org_id VARCHAR(64) NOT NULL DEFAULT 'default',
+                    connected_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+
+            await session.commit()
+        logger.info("Ensured marketing tables exist (6 tables)")
+
+    # ── Brand Profile CRUD ───────────────────────────────────────────
+
+    async def get_brand_profiles(self, org_id: str = DEFAULT_ORG) -> list[dict]:
+        """Get all brand voice profiles."""
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                SELECT id, name, tone, vocabulary_rules, examples,
+                       platform_guidelines, is_default, org_id,
+                       created_at, updated_at
+                FROM brand_profiles
+                WHERE org_id = :org_id
+                ORDER BY is_default DESC, name
+            """), {"org_id": org_id})
+            return [dict(r) for r in result.mappings().all()]
+
+    async def create_brand_profile(self, data: dict, org_id: str = DEFAULT_ORG) -> dict:
+        """Create a new brand voice profile. Returns the created row."""
+        now = datetime.now(timezone.utc)
+        async with self._session_factory() as session:
+            # If this is set as default, unset others first
+            if data.get("is_default"):
+                await session.execute(text("""
+                    UPDATE brand_profiles SET is_default = FALSE
+                    WHERE org_id = :org_id AND is_default = TRUE
+                """), {"org_id": org_id})
+
+            result = await session.execute(text("""
+                INSERT INTO brand_profiles
+                    (name, tone, vocabulary_rules, examples, platform_guidelines,
+                     is_default, org_id, created_at, updated_at)
+                VALUES
+                    (:name, :tone, :vocabulary_rules, :examples, :platform_guidelines,
+                     :is_default, :org_id, :now, :now)
+                RETURNING id, name, tone, vocabulary_rules, examples,
+                          platform_guidelines, is_default, org_id,
+                          created_at, updated_at
+            """), {
+                "name": data.get("name", ""),
+                "tone": data.get("tone", ""),
+                "vocabulary_rules": json.dumps(data.get("vocabulary_rules", {})),
+                "examples": json.dumps(data.get("examples", [])),
+                "platform_guidelines": json.dumps(data.get("platform_guidelines", {})),
+                "is_default": data.get("is_default", False),
+                "org_id": org_id,
+                "now": now,
+            })
+            row = result.mappings().first()
+            await session.commit()
+            return dict(row) if row else {}
+
+    async def update_brand_profile(
+        self, profile_id: int, data: dict, org_id: str = DEFAULT_ORG
+    ) -> Optional[dict]:
+        """Update a brand voice profile. Returns the updated row or None."""
+        now = datetime.now(timezone.utc)
+        # Build SET clause dynamically from provided fields
+        allowed = {"name", "tone", "vocabulary_rules", "examples",
+                   "platform_guidelines", "is_default"}
+        sets = []
+        params: dict[str, Any] = {"id": profile_id, "org_id": org_id, "now": now}
+
+        for key in allowed:
+            if key in data:
+                val = data[key]
+                if key in ("vocabulary_rules", "examples", "platform_guidelines"):
+                    val = json.dumps(val) if not isinstance(val, str) else val
+                sets.append(f"{key} = :{key}")
+                params[key] = val
+
+        if not sets:
+            return None
+
+        sets.append("updated_at = :now")
+
+        async with self._session_factory() as session:
+            # If setting as default, unset others first
+            if data.get("is_default"):
+                await session.execute(text("""
+                    UPDATE brand_profiles SET is_default = FALSE
+                    WHERE org_id = :org_id AND is_default = TRUE AND id != :id
+                """), {"org_id": org_id, "id": profile_id})
+
+            result = await session.execute(text(f"""
+                UPDATE brand_profiles SET {', '.join(sets)}
+                WHERE id = :id AND org_id = :org_id
+                RETURNING id, name, tone, vocabulary_rules, examples,
+                          platform_guidelines, is_default, org_id,
+                          created_at, updated_at
+            """), params)
+            row = result.mappings().first()
+            await session.commit()
+            return dict(row) if row else None
+
+    async def delete_brand_profile(
+        self, profile_id: int, org_id: str = DEFAULT_ORG
+    ) -> bool:
+        """Delete a brand profile. Returns True if a row was deleted."""
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                DELETE FROM brand_profiles
+                WHERE id = :id AND org_id = :org_id
+            """), {"id": profile_id, "org_id": org_id})
+            await session.commit()
+            return result.rowcount > 0
+
+    # ── Campaign CRUD ────────────────────────────────────────────────
+
+    @staticmethod
+    def _parse_date(val) -> Optional[Any]:
+        """Convert a date string (YYYY-MM-DD) to a date object, or pass through."""
+        if val is None:
+            return None
+        if isinstance(val, str) and val:
+            from datetime import date as date_type
+            try:
+                return date_type.fromisoformat(val)
+            except ValueError:
+                return None
+        return val
+
+    async def create_campaign(self, data: dict, org_id: str = DEFAULT_ORG) -> dict:
+        """Create a new marketing campaign. Returns the created row."""
+        import uuid
+        now = datetime.now(timezone.utc)
+        campaign_id = data.get("id") or str(uuid.uuid4())
+
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                INSERT INTO campaigns
+                    (id, name, status, campaign_type, budget_usd, spent_usd,
+                     start_date, end_date, goals, strategy,
+                     brand_profile_id, org_id, created_at, updated_at)
+                VALUES
+                    (:id, :name, :status, :campaign_type, :budget_usd, :spent_usd,
+                     :start_date, :end_date, :goals, :strategy,
+                     :brand_profile_id, :org_id, :now, :now)
+                RETURNING *
+            """), {
+                "id": campaign_id,
+                "name": data.get("name", ""),
+                "status": data.get("status", "planning"),
+                "campaign_type": data.get("campaign_type", ""),
+                "budget_usd": data.get("budget_usd"),
+                "spent_usd": data.get("spent_usd", 0),
+                "start_date": self._parse_date(data.get("start_date")),
+                "end_date": self._parse_date(data.get("end_date")),
+                "goals": json.dumps(data.get("goals", {})),
+                "strategy": data.get("strategy", ""),
+                "brand_profile_id": data.get("brand_profile_id"),
+                "org_id": org_id,
+                "now": now,
+            })
+            row = result.mappings().first()
+            await session.commit()
+            return dict(row) if row else {}
+
+    async def get_campaign(
+        self, campaign_id: str, org_id: str = DEFAULT_ORG
+    ) -> Optional[dict]:
+        """Get a single campaign by ID."""
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                SELECT * FROM campaigns
+                WHERE id = :id AND org_id = :org_id
+            """), {"id": campaign_id, "org_id": org_id})
+            row = result.mappings().first()
+            return dict(row) if row else None
+
+    async def update_campaign(
+        self, campaign_id: str, data: dict, org_id: str = DEFAULT_ORG
+    ) -> Optional[dict]:
+        """Update campaign fields. Returns the updated row or None."""
+        now = datetime.now(timezone.utc)
+        allowed = {"name", "status", "campaign_type", "budget_usd", "spent_usd",
+                   "start_date", "end_date", "goals", "strategy", "brand_profile_id"}
+        sets = []
+        params: dict[str, Any] = {"id": campaign_id, "org_id": org_id, "now": now}
+
+        for key in allowed:
+            if key in data:
+                val = data[key]
+                if key == "goals" and not isinstance(val, str):
+                    val = json.dumps(val)
+                if key in ("start_date", "end_date"):
+                    val = self._parse_date(val)
+                sets.append(f"{key} = :{key}")
+                params[key] = val
+
+        if not sets:
+            return None
+
+        sets.append("updated_at = :now")
+
+        async with self._session_factory() as session:
+            result = await session.execute(text(f"""
+                UPDATE campaigns SET {', '.join(sets)}
+                WHERE id = :id AND org_id = :org_id
+                RETURNING *
+            """), params)
+            row = result.mappings().first()
+            await session.commit()
+            return dict(row) if row else None
+
+    async def list_campaigns(
+        self,
+        status: Optional[str] = None,
+        campaign_type: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        org_id: str = DEFAULT_ORG,
+    ) -> list[dict]:
+        """List campaigns with optional filters."""
+        wheres = ["org_id = :org_id"]
+        params: dict[str, Any] = {"org_id": org_id, "limit": limit, "offset": offset}
+
+        if status:
+            wheres.append("status = :status")
+            params["status"] = status
+        if campaign_type:
+            wheres.append("campaign_type = :campaign_type")
+            params["campaign_type"] = campaign_type
+
+        where_clause = " AND ".join(wheres)
+
+        async with self._session_factory() as session:
+            result = await session.execute(text(f"""
+                SELECT * FROM campaigns
+                WHERE {where_clause}
+                ORDER BY created_at DESC
+                LIMIT :limit OFFSET :offset
+            """), params)
+            return [dict(r) for r in result.mappings().all()]
+
+    async def get_campaign_content_counts(
+        self, campaign_id: str, org_id: str = DEFAULT_ORG
+    ) -> dict:
+        """Get content item counts per status for a campaign."""
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                SELECT status, COUNT(*) as count
+                FROM content_items
+                WHERE campaign_id = :campaign_id AND org_id = :org_id
+                GROUP BY status
+            """), {"campaign_id": campaign_id, "org_id": org_id})
+            counts = {}
+            for row in result.mappings().all():
+                counts[row["status"]] = row["count"]
+            return counts
+
+    # ── Content Item CRUD ────────────────────────────────────────────
+
+    async def create_content_item(self, data: dict, org_id: str = DEFAULT_ORG) -> dict:
+        """Create a new content item in draft state. Returns the created row."""
+        import uuid
+        now = datetime.now(timezone.utc)
+        content_id = data.get("id") or str(uuid.uuid4())
+
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                INSERT INTO content_items
+                    (id, campaign_id, content_type, platform, status,
+                     title, body, media_urls, brand_profile_id,
+                     created_by, org_id, created_at, updated_at)
+                VALUES
+                    (:id, :campaign_id, :content_type, :platform, 'draft',
+                     :title, :body, :media_urls, :brand_profile_id,
+                     :created_by, :org_id, :now, :now)
+                RETURNING *
+            """), {
+                "id": content_id,
+                "campaign_id": data.get("campaign_id"),
+                "content_type": data.get("content_type", "social_post"),
+                "platform": data.get("platform", ""),
+                "title": data.get("title", ""),
+                "body": data.get("body", ""),
+                "media_urls": json.dumps(data.get("media_urls", [])),
+                "brand_profile_id": data.get("brand_profile_id"),
+                "created_by": data.get("created_by", "agent"),
+                "org_id": org_id,
+                "now": now,
+            })
+            row = result.mappings().first()
+            await session.commit()
+            return dict(row) if row else {}
+
+    async def get_content_item(
+        self, content_id: str, org_id: str = DEFAULT_ORG
+    ) -> Optional[dict]:
+        """Get a single content item by ID."""
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                SELECT * FROM content_items
+                WHERE id = :id AND org_id = :org_id
+            """), {"id": content_id, "org_id": org_id})
+            row = result.mappings().first()
+            return dict(row) if row else None
+
+    async def update_content_item(
+        self, content_id: str, data: dict, org_id: str = DEFAULT_ORG
+    ) -> Optional[dict]:
+        """Update content item fields. Returns the updated row or None."""
+        now = datetime.now(timezone.utc)
+        allowed = {"campaign_id", "content_type", "platform", "status",
+                   "title", "body", "media_urls", "scheduled_at", "published_at",
+                   "external_id", "metrics", "brand_profile_id",
+                   "created_by", "approved_by"}
+        sets = []
+        params: dict[str, Any] = {"id": content_id, "org_id": org_id, "now": now}
+
+        for key in allowed:
+            if key in data:
+                val = data[key]
+                if key in ("media_urls", "metrics") and not isinstance(val, str):
+                    val = json.dumps(val)
+                sets.append(f"{key} = :{key}")
+                params[key] = val
+
+        if not sets:
+            return None
+
+        sets.append("updated_at = :now")
+
+        async with self._session_factory() as session:
+            result = await session.execute(text(f"""
+                UPDATE content_items SET {', '.join(sets)}
+                WHERE id = :id AND org_id = :org_id
+                RETURNING *
+            """), params)
+            row = result.mappings().first()
+            await session.commit()
+            return dict(row) if row else None
+
+    async def list_content_items(
+        self,
+        campaign_id: Optional[str] = None,
+        status: Optional[str] = None,
+        platform: Optional[str] = None,
+        content_type: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        org_id: str = DEFAULT_ORG,
+    ) -> list[dict]:
+        """List content items with optional filters."""
+        wheres = ["org_id = :org_id"]
+        params: dict[str, Any] = {"org_id": org_id, "limit": limit, "offset": offset}
+
+        if campaign_id:
+            wheres.append("campaign_id = :campaign_id")
+            params["campaign_id"] = campaign_id
+        if status:
+            wheres.append("status = :status")
+            params["status"] = status
+        if platform:
+            wheres.append("platform = :platform")
+            params["platform"] = platform
+        if content_type:
+            wheres.append("content_type = :content_type")
+            params["content_type"] = content_type
+
+        where_clause = " AND ".join(wheres)
+
+        async with self._session_factory() as session:
+            result = await session.execute(text(f"""
+                SELECT * FROM content_items
+                WHERE {where_clause}
+                ORDER BY created_at DESC
+                LIMIT :limit OFFSET :offset
+            """), params)
+            return [dict(r) for r in result.mappings().all()]
+
+    # ── Calendar Events ──────────────────────────────────────────────
+
+    async def get_calendar_events(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        org_id: str = DEFAULT_ORG,
+    ) -> list[dict]:
+        """Get calendar events for a date range."""
+        wheres = ["org_id = :org_id"]
+        params: dict[str, Any] = {"org_id": org_id}
+
+        if start_date:
+            wheres.append("scheduled_at >= :start_date")
+            params["start_date"] = start_date
+        if end_date:
+            wheres.append("scheduled_at <= :end_date")
+            params["end_date"] = end_date
+
+        where_clause = " AND ".join(wheres)
+
+        async with self._session_factory() as session:
+            result = await session.execute(text(f"""
+                SELECT id, campaign_id, content_item_id, event_type,
+                       title, scheduled_at, completed_at, org_id
+                FROM calendar_events
+                WHERE {where_clause}
+                ORDER BY scheduled_at ASC
+            """), params)
+            return [dict(r) for r in result.mappings().all()]
+
+    async def create_calendar_event(
+        self, data: dict, org_id: str = DEFAULT_ORG
+    ) -> dict:
+        """Create a calendar event. Returns the created row."""
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                INSERT INTO calendar_events
+                    (campaign_id, content_item_id, event_type, title,
+                     scheduled_at, org_id)
+                VALUES
+                    (:campaign_id, :content_item_id, :event_type, :title,
+                     :scheduled_at, :org_id)
+                RETURNING *
+            """), {
+                "campaign_id": data.get("campaign_id"),
+                "content_item_id": data.get("content_item_id"),
+                "event_type": data.get("event_type", "publish"),
+                "title": data.get("title", ""),
+                "scheduled_at": self._parse_timestamp(data.get("scheduled_at")),
+                "org_id": org_id,
+            })
+            row = result.mappings().first()
+            await session.commit()
+            return dict(row) if row else {}
+
+    @staticmethod
+    def _parse_timestamp(val) -> Optional[datetime]:
+        """Convert a timestamp string to a datetime object, or pass through."""
+        if val is None:
+            return None
+        if isinstance(val, str) and val:
+            try:
+                return datetime.fromisoformat(val.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        return val
+
+    # ── Marketing Metrics ────────────────────────────────────────────
+
+    async def get_marketing_metrics(
+        self,
+        source: Optional[str] = None,
+        days: int = 30,
+        org_id: str = DEFAULT_ORG,
+    ) -> dict:
+        """Get aggregated marketing metrics.
+
+        Returns grouped metrics by source and metric_name for the given period.
+        """
+        wheres = ["org_id = :org_id",
+                   "recorded_at >= NOW() - INTERVAL ':days days'"]
+        params: dict[str, Any] = {"org_id": org_id, "days": days}
+
+        if source:
+            wheres.append("source = :source")
+            params["source"] = source
+
+        # Use explicit interval construction to avoid parameter interpolation issue
+        async with self._session_factory() as session:
+            result = await session.execute(text(f"""
+                SELECT source, metric_name,
+                       SUM(metric_value) as total,
+                       AVG(metric_value) as average,
+                       COUNT(*) as data_points
+                FROM marketing_metrics
+                WHERE org_id = :org_id
+                  AND recorded_at >= NOW() - make_interval(days => :days)
+                  {"AND source = :source" if source else ""}
+                GROUP BY source, metric_name
+                ORDER BY source, metric_name
+            """), params)
+            metrics = {}
+            for row in result.mappings().all():
+                src = row["source"]
+                if src not in metrics:
+                    metrics[src] = {}
+                metrics[src][row["metric_name"]] = {
+                    "total": float(row["total"]) if row["total"] else 0,
+                    "average": float(row["average"]) if row["average"] else 0,
+                    "data_points": row["data_points"],
+                }
+            return metrics
+
+    async def record_marketing_metric(
+        self,
+        source: str,
+        metric_name: str,
+        metric_value: float,
+        dimensions: Optional[dict] = None,
+        org_id: str = DEFAULT_ORG,
+    ) -> dict:
+        """Record a marketing metric data point."""
+        now = datetime.now(timezone.utc)
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                INSERT INTO marketing_metrics
+                    (source, metric_name, metric_value, dimensions,
+                     recorded_at, org_id)
+                VALUES
+                    (:source, :metric_name, :metric_value, :dimensions,
+                     :recorded_at, :org_id)
+                RETURNING *
+            """), {
+                "source": source,
+                "metric_name": metric_name,
+                "metric_value": metric_value,
+                "dimensions": json.dumps(dimensions or {}),
+                "recorded_at": now,
+                "org_id": org_id,
+            })
+            row = result.mappings().first()
+            await session.commit()
+            return dict(row) if row else {}
+
+    # ── Platform Connections ─────────────────────────────────────────
+
+    async def get_platform_connections(
+        self, org_id: str = DEFAULT_ORG
+    ) -> list[dict]:
+        """Get all connected marketing platforms."""
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                SELECT id, platform, account_name, scopes, status,
+                       last_refreshed_at, org_id, connected_at
+                FROM platform_connections
+                WHERE org_id = :org_id
+                ORDER BY connected_at DESC
+            """), {"org_id": org_id})
+            # Note: credentials_encrypted intentionally excluded from results
+            return [dict(r) for r in result.mappings().all()]
+
     # ── Tenant Migration ────────────────────────────────────────────
 
     async def ensure_org_id_columns(self) -> None:

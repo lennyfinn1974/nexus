@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils'
 import {
   LayoutDashboard, Heart, Shield, Activity, Users, Layers, Settings,
   Puzzle, UserCircle, MessageSquare, ScrollText, Monitor, Zap, LogOut, ArrowLeft, Kanban, Network, Brain, BarChart3,
+  Megaphone,
 } from 'lucide-react'
 
 const navSections = [
@@ -30,6 +31,7 @@ const navSections = [
       { to: '/admin/plugins', icon: Puzzle, label: 'Plugins' },
       { to: '/admin/persona', icon: UserCircle, label: 'Persona' },
       { to: '/admin/skills', icon: Zap, label: 'Skills' },
+      { to: '/admin/marketing', icon: Megaphone, label: 'Marketing' },
     ],
   },
   {

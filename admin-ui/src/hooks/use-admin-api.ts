@@ -10,6 +10,8 @@ import type {
   WorkItem, WorkItemCounts,
   ClusterStatusResponse, ClusterAgent, ClusterMetrics,
   MemorySystemStatus, KnowledgeGraphData,
+  BrandProfile, MarketingCampaign, CampaignSummary, ContentItem,
+  CalendarEvent, MarketingAnalytics, PlatformConnection,
 } from '@/types/api'
 
 // ── Queries ──
@@ -275,3 +277,199 @@ export const useKnowledgeGraph = (maxEntities = 100) =>
     queryKey: ['admin', 'memory', 'knowledge-graph', maxEntities],
     queryFn: () => api.get<KnowledgeGraphData>(`/admin/memory/knowledge-graph?max_entities=${maxEntities}`),
   })
+
+// ── Marketing ──
+
+export const useBrandProfiles = () =>
+  useQuery({
+    queryKey: ['marketing', 'brand-profiles'],
+    queryFn: () => api.get<{ profiles: BrandProfile[]; total: number }>('/marketing/brand-profiles'),
+  })
+
+export const useCampaigns = (status?: string, campaignType?: string) =>
+  useQuery({
+    queryKey: ['marketing', 'campaigns', status, campaignType],
+    queryFn: () => {
+      const params = new URLSearchParams()
+      if (status) params.set('status', status)
+      if (campaignType) params.set('campaign_type', campaignType)
+      const qs = params.toString()
+      return api.get<{ campaigns: MarketingCampaign[]; total: number }>(
+        `/marketing/campaigns${qs ? `?${qs}` : ''}`
+      )
+    },
+  })
+
+export const useCampaignDetail = (campaignId: string | null) =>
+  useQuery({
+    queryKey: ['marketing', 'campaigns', campaignId],
+    queryFn: () => api.get<{ campaign: CampaignSummary }>(`/marketing/campaigns/${campaignId}`),
+    enabled: !!campaignId,
+  })
+
+export const useMarketingContent = (campaignId?: string, status?: string, platform?: string) =>
+  useQuery({
+    queryKey: ['marketing', 'content', campaignId, status, platform],
+    queryFn: () => {
+      const params = new URLSearchParams()
+      if (campaignId) params.set('campaign_id', campaignId)
+      if (status) params.set('status', status)
+      if (platform) params.set('platform', platform)
+      const qs = params.toString()
+      return api.get<{ items: ContentItem[]; total: number }>(
+        `/marketing/content${qs ? `?${qs}` : ''}`
+      )
+    },
+  })
+
+export const useApprovalQueue = () =>
+  useQuery({
+    queryKey: ['marketing', 'approval-queue'],
+    queryFn: () => api.get<{ items: ContentItem[]; total: number }>('/marketing/approval-queue'),
+  })
+
+export const useMarketingCalendar = (start?: string, end?: string) =>
+  useQuery({
+    queryKey: ['marketing', 'calendar', start, end],
+    queryFn: () => {
+      const params = new URLSearchParams()
+      if (start) params.set('start', start)
+      if (end) params.set('end', end)
+      const qs = params.toString()
+      return api.get<{ events: CalendarEvent[] }>(
+        `/marketing/calendar${qs ? `?${qs}` : ''}`
+      )
+    },
+  })
+
+export const useMarketingAnalytics = (source?: string, days = 30) =>
+  useQuery({
+    queryKey: ['marketing', 'analytics', source, days],
+    queryFn: () => {
+      const params = new URLSearchParams()
+      if (source) params.set('source', source)
+      params.set('days', String(days))
+      return api.get<MarketingAnalytics>(`/marketing/analytics?${params.toString()}`)
+    },
+  })
+
+export const useMarketingPlatforms = () =>
+  useQuery({
+    queryKey: ['marketing', 'platforms'],
+    queryFn: () => api.get<{ platforms: PlatformConnection[] }>('/marketing/platforms'),
+  })
+
+// ── Marketing Mutations ──
+
+export function useCreateCampaign() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post<{ status: string; campaign: MarketingCampaign }>('/marketing/campaigns', data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['marketing', 'campaigns'] }),
+  })
+}
+
+export function useUpdateCampaign() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      api.put<{ status: string; campaign: MarketingCampaign }>(`/marketing/campaigns/${id}`, data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['marketing', 'campaigns'] }),
+  })
+}
+
+export function useCreateContent() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post<{ status: string; item: ContentItem }>('/marketing/content', data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['marketing', 'content'] })
+      qc.invalidateQueries({ queryKey: ['marketing', 'approval-queue'] })
+    },
+  })
+}
+
+export function useUpdateContent() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      api.put<{ status: string; item: ContentItem }>(`/marketing/content/${id}`, data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['marketing', 'content'] }),
+  })
+}
+
+export function useApproveContent() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (contentId: string) =>
+      api.post<{ status: string; item: ContentItem }>(`/marketing/content/${contentId}/approve`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['marketing', 'content'] })
+      qc.invalidateQueries({ queryKey: ['marketing', 'approval-queue'] })
+    },
+  })
+}
+
+export function useRejectContent() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (contentId: string) =>
+      api.post<{ status: string; item: ContentItem }>(`/marketing/content/${contentId}/reject`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['marketing', 'content'] })
+      qc.invalidateQueries({ queryKey: ['marketing', 'approval-queue'] })
+    },
+  })
+}
+
+export function usePublishContent() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (contentId: string) =>
+      api.post<{ status: string; item: ContentItem }>(`/marketing/content/${contentId}/publish`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['marketing', 'content'] }),
+  })
+}
+
+export function useScheduleContent() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ contentId, scheduledAt }: { contentId: string; scheduledAt: string }) =>
+      api.post<{ status: string; item: ContentItem }>(`/marketing/content/${contentId}/schedule`, {
+        scheduled_at: scheduledAt,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['marketing', 'content'] })
+      qc.invalidateQueries({ queryKey: ['marketing', 'calendar'] })
+    },
+  })
+}
+
+export function useCreateBrandProfile() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (data: Record<string, unknown>) =>
+      api.post<{ status: string; profile: BrandProfile }>('/marketing/brand-profiles', data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['marketing', 'brand-profiles'] }),
+  })
+}
+
+export function useUpdateBrandProfile() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Record<string, unknown> }) =>
+      api.put<{ status: string; profile: BrandProfile }>(`/marketing/brand-profiles/${id}`, data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['marketing', 'brand-profiles'] }),
+  })
+}
+
+export function useDeleteBrandProfile() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) =>
+      api.delete<{ status: string; id: number }>(`/marketing/brand-profiles/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['marketing', 'brand-profiles'] }),
+  })
+}

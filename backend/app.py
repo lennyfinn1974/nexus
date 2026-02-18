@@ -18,7 +18,7 @@ from auth import (
     OAuthManager,
     UserManager,
 )
-from config_manager import CLUSTER_KEYS, MODEL_KEYS, ConfigManager
+from config_manager import CLUSTER_KEYS, COMMS_KEYS, MARKETING_KEYS, MODEL_KEYS, ConfigManager
 from core.security import init_allowed_dirs, validate_path
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -95,7 +95,10 @@ class AppState:
     tool_executor: Any = None
     cluster_manager: Any = None
     claude_session_manager: Any = None
+    terminal_session_manager: Any = None
+    git_coordinator: Any = None
     telegram_channel: Any = None
+    channel_manager: Any = None
     jwt_manager: JWTManager = None
     oauth_manager: OAuthManager = None
     user_manager: UserManager = None
@@ -297,6 +300,121 @@ async def _on_model_settings_changed(key, old_value, new_value, state: AppState)
         state.plugin_manager.router = state.model_router
 
 
+async def _on_comms_settings_changed(key, old_value, new_value, state: AppState):
+    """Reconnect WhatsApp/SMS adapters when Twilio credentials change."""
+    logger.info(f"Comms setting changed: {key} — will reconnect channel adapters")
+    channel_mgr = getattr(state, "channel_manager", None)
+    if not channel_mgr:
+        return
+
+    cfg = state.cfg
+
+    # ── WhatsApp reconnect ──
+    if cfg.whatsapp_enabled:
+        existing_wa = channel_mgr.get("whatsapp")
+        if existing_wa:
+            await existing_wa.stop()
+        try:
+            from channels.whatsapp import WhatsAppAdapter
+            wa_adapter = WhatsAppAdapter(
+                account_sid=cfg.twilio_account_sid,
+                auth_token=cfg.twilio_auth_token,
+                whatsapp_number=cfg.twilio_whatsapp_number,
+                webhook_base_url=cfg.get("TWILIO_WEBHOOK_BASE_URL", ""),
+                db=state.db,
+                message_handler=_make_channel_handler(state, "whatsapp"),
+                agent_name=cfg.agent_name,
+                cfg=cfg,
+            )
+            await wa_adapter.start()
+            channel_mgr.register(wa_adapter)
+            logger.info("WhatsApp adapter reconnected after settings change")
+        except Exception as e:
+            logger.error(f"WhatsApp adapter reconnect failed: {e}")
+    else:
+        existing_wa = channel_mgr.get("whatsapp")
+        if existing_wa:
+            await existing_wa.stop()
+            logger.info("WhatsApp adapter stopped (disabled)")
+
+    # ── SMS reconnect ──
+    if cfg.sms_enabled:
+        existing_sms = channel_mgr.get("sms")
+        if existing_sms:
+            await existing_sms.stop()
+        try:
+            from channels.sms import SMSAdapter
+            sms_adapter = SMSAdapter(
+                account_sid=cfg.twilio_account_sid,
+                auth_token=cfg.twilio_auth_token,
+                phone_number=cfg.twilio_phone_number,
+                webhook_base_url=cfg.get("TWILIO_WEBHOOK_BASE_URL", ""),
+                db=state.db,
+                message_handler=_make_channel_handler(state, "sms"),
+                agent_name=cfg.agent_name,
+                cfg=cfg,
+            )
+            await sms_adapter.start()
+            channel_mgr.register(sms_adapter)
+            logger.info("SMS adapter reconnected after settings change")
+        except Exception as e:
+            logger.error(f"SMS adapter reconnect failed: {e}")
+    else:
+        existing_sms = channel_mgr.get("sms")
+        if existing_sms:
+            await existing_sms.stop()
+            logger.info("SMS adapter stopped (disabled)")
+
+
+async def _on_marketing_settings_changed(key, old_value, new_value, state: AppState):
+    """Reinitialize marketing managers when marketing settings change."""
+    logger.info(f"Marketing setting changed: {key} — will reinitialize marketing system")
+    cfg = state.cfg
+
+    if cfg.marketing_enabled:
+        try:
+            from core.marketing.brand import BrandVoiceManager
+            from core.marketing.campaign import CampaignManager
+            from core.marketing.content import ContentWorkflow
+
+            state.brand_voice_manager = BrandVoiceManager(db=state.db)
+            await state.brand_voice_manager.load_all()
+            state.content_workflow = ContentWorkflow(db=state.db)
+            state.campaign_manager = CampaignManager(db=state.db)
+            logger.info("Marketing system reinitialized after settings change")
+        except Exception as e:
+            logger.error(f"Marketing system reinit failed: {e}")
+    else:
+        state.brand_voice_manager = None
+        state.content_workflow = None
+        state.campaign_manager = None
+        logger.info("Marketing system disabled after settings change")
+
+
+def _make_channel_handler(state: AppState, channel: str):
+    """Create a message handler function for a channel adapter.
+
+    This returns a coroutine that routes messages through the shared
+    agent pipeline (process_message), with channel-specific context.
+    """
+    async def handler(user_id: str, text: str, conv_id: str = None) -> str:
+        from core.message_processor import process_message
+        return await process_message(
+            user_id,
+            text,
+            cfg=state.cfg,
+            db=state.db,
+            skills_engine=state.skills_engine,
+            model_router=state.model_router,
+            task_queue=state.task_queue,
+            plugin_manager=state.plugin_manager,
+            skill_catalog=getattr(state, "skill_catalog", None),
+            conv_id=conv_id,
+            passive_memory=getattr(state, "passive_memory", None),
+        )
+    return handler
+
+
 def _discover_catalog_sources(cfg) -> list[str]:
     """Find external skill catalog directories (anti-gravity, etc.).
 
@@ -376,6 +494,18 @@ async def lifespan(app: FastAPI):
     state.cfg.subscribe(
         MODEL_KEYS,
         lambda k, old, new: asyncio.ensure_future(_on_model_settings_changed(k, old, new, state)),
+    )
+
+    # Subscribe comms/channel adapter reconnection
+    state.cfg.subscribe(
+        COMMS_KEYS,
+        lambda k, old, new: asyncio.ensure_future(_on_comms_settings_changed(k, old, new, state)),
+    )
+
+    # Subscribe marketing system reconnection
+    state.cfg.subscribe(
+        MARKETING_KEYS,
+        lambda k, old, new: asyncio.ensure_future(_on_marketing_settings_changed(k, old, new, state)),
     )
 
     # Ensure directories
@@ -604,6 +734,40 @@ async def lifespan(app: FastAPI):
         state.headless_renderer = None
         logger.info("Headless renderer: Playwright not installed (optional)")
 
+    # Local Event Bus (in-process typed events for conductor/terminal/git coordination)
+    try:
+        from core.event_bus import event_bus
+        event_bus.init()
+        logger.info("Local event bus initialized")
+    except Exception as e:
+        logger.warning(f"Local event bus init failed: {e}")
+
+    # Terminal Session Manager (persistent PTY shell sessions)
+    try:
+        from core.terminal_session import terminal_session_manager
+        terminal_session_manager.init(
+            event_bus=event_bus if 'event_bus' in dir() else None,
+            ws_manager=websocket_manager,
+        )
+        state.terminal_session_manager = terminal_session_manager
+        logger.info("Terminal session manager initialized")
+    except Exception as e:
+        state.terminal_session_manager = None
+        logger.warning(f"Terminal session manager init failed: {e}")
+
+    # Git Coordinator (branch-per-agent git strategy)
+    try:
+        from core.git_coordinator import git_coordinator
+        git_coordinator.init(
+            event_bus=event_bus if 'event_bus' in dir() else None,
+            project_dir=state.base_dir or "/Users/lennyfinn/Nexus",
+        )
+        state.git_coordinator = git_coordinator
+        logger.info("Git coordinator initialized")
+    except Exception as e:
+        state.git_coordinator = None
+        logger.warning(f"Git coordinator init failed: {e}")
+
     # Inject session manager into terminal plugin
     if state.claude_session_manager:
         terminal_plugin = state.plugin_manager.plugins.get("terminal")
@@ -615,6 +779,12 @@ async def lifespan(app: FastAPI):
         if sovereign_plugin and hasattr(sovereign_plugin, "set_session_manager"):
             sovereign_plugin.set_session_manager(state.claude_session_manager)
             logger.info("Session manager injected into sovereign plugin")
+
+    # Inject app state into sovereign plugin (for conductor access)
+    sovereign_plugin = state.plugin_manager.plugins.get("sovereign")
+    if sovereign_plugin:
+        sovereign_plugin._app_state = state
+        logger.info("App state injected into sovereign plugin")
 
     # Tool executor (Phase 6)
     try:
@@ -647,10 +817,21 @@ async def lifespan(app: FastAPI):
         cluster_manager=state.cluster_manager,
     )
 
-    # Telegram (optional)
+    # ── Channel System ──
+    # Initialize the unified channel manager and register adapters.
+    # The channel_identities table enables cross-channel conversation continuity.
+    try:
+        from channels.base import ChannelManager, channel_manager
+        await state.db.ensure_channel_identities_table()
+        state.channel_manager = channel_manager
+        logger.info("Channel manager initialized, channel_identities table ensured")
+    except Exception as e:
+        logger.warning(f"Channel manager init failed: {e}")
+
+    # Telegram adapter (optional — replaces old TelegramChannel with ChannelAdapter wrapper)
     if state.cfg.has_telegram:
         try:
-            from channels.telegram import TelegramChannel
+            from channels.telegram_adapter import TelegramAdapter
             from core.message_processor import get_status, process_message
 
             async def tg_handler(user_id: str, text: str, conv_id: str = None) -> str:
@@ -668,13 +849,13 @@ async def lifespan(app: FastAPI):
                     passive_memory=getattr(state, "passive_memory", None),
                 )
 
-            state.telegram_channel = TelegramChannel(
-                state.cfg.telegram_bot_token,
-                state.db,
-                tg_handler,
+            telegram_adapter = TelegramAdapter(
+                token=state.cfg.telegram_bot_token,
+                db=state.db,
+                message_handler=tg_handler,
                 agent_name=state.cfg.agent_name,
             )
-            await state.telegram_channel.start(
+            await telegram_adapter.start(
                 status_fn=lambda: get_status(
                     state.model_router,
                     state.plugin_manager,
@@ -682,9 +863,95 @@ async def lifespan(app: FastAPI):
                     state.skills_engine,
                 )
             )
-            logger.info("Telegram bot started")
+            # Register with channel manager
+            if state.channel_manager:
+                state.channel_manager.register(telegram_adapter)
+            # Keep backward compat — existing code references state.telegram_channel
+            state.telegram_channel = telegram_adapter.inner
+            logger.info("Telegram adapter started (ChannelAdapter + TelegramChannel)")
         except Exception as e:
             logger.warning(f"Telegram failed to start: {e}")
+
+    # WhatsApp adapter (optional — requires Twilio credentials + WHATSAPP_ENABLED)
+    if state.cfg.whatsapp_enabled:
+        try:
+            from channels.whatsapp import WhatsAppAdapter
+
+            wa_adapter = WhatsAppAdapter(
+                account_sid=state.cfg.twilio_account_sid,
+                auth_token=state.cfg.twilio_auth_token,
+                whatsapp_number=state.cfg.twilio_whatsapp_number,
+                webhook_base_url=state.cfg.get("TWILIO_WEBHOOK_BASE_URL", ""),
+                db=state.db,
+                message_handler=_make_channel_handler(state, "whatsapp"),
+                agent_name=state.cfg.agent_name,
+                cfg=state.cfg,
+            )
+            await wa_adapter.start()
+            if state.channel_manager:
+                state.channel_manager.register(wa_adapter)
+            logger.info("WhatsApp adapter started")
+        except Exception as e:
+            logger.warning(f"WhatsApp adapter failed to start: {e}")
+    else:
+        logger.info("WhatsApp adapter: disabled (WHATSAPP_ENABLED=false or no Twilio credentials)")
+
+    # SMS adapter (optional — requires Twilio credentials + SMS_ENABLED)
+    if state.cfg.sms_enabled:
+        try:
+            from channels.sms import SMSAdapter
+
+            sms_adapter = SMSAdapter(
+                account_sid=state.cfg.twilio_account_sid,
+                auth_token=state.cfg.twilio_auth_token,
+                phone_number=state.cfg.twilio_phone_number,
+                webhook_base_url=state.cfg.get("TWILIO_WEBHOOK_BASE_URL", ""),
+                db=state.db,
+                message_handler=_make_channel_handler(state, "sms"),
+                agent_name=state.cfg.agent_name,
+                cfg=state.cfg,
+            )
+            await sms_adapter.start()
+            if state.channel_manager:
+                state.channel_manager.register(sms_adapter)
+            logger.info("SMS adapter started")
+        except Exception as e:
+            logger.warning(f"SMS adapter failed to start: {e}")
+    else:
+        logger.info("SMS adapter: disabled (SMS_ENABLED=false or no Twilio credentials)")
+
+    # ── Marketing System (M1 — brand, content, campaigns) ──────────
+    await state.db.ensure_marketing_tables()
+
+    if state.cfg.marketing_enabled:
+        try:
+            from core.marketing.brand import BrandVoiceManager
+            from core.marketing.campaign import CampaignManager
+            from core.marketing.content import ContentWorkflow
+
+            state.brand_voice_manager = BrandVoiceManager(db=state.db)
+            await state.brand_voice_manager.load_all()
+            logger.info(
+                f"Brand voice manager loaded — "
+                f"{len(state.brand_voice_manager._cache)} profile(s)"
+            )
+
+            state.content_workflow = ContentWorkflow(db=state.db)
+            logger.info("Content workflow initialized")
+
+            state.campaign_manager = CampaignManager(db=state.db)
+            logger.info("Campaign manager initialized")
+
+        except Exception as e:
+            state.brand_voice_manager = None
+            state.content_workflow = None
+            state.campaign_manager = None
+            logger.warning(f"Marketing system failed to initialize: {e}")
+    else:
+        state.brand_voice_manager = None
+        state.content_workflow = None
+        state.campaign_manager = None
+        logger.info("Marketing system: disabled (MARKETING_ENABLED=false)")
 
     # Passive Memory Extractor — auto-learns from conversations
     try:
@@ -921,6 +1188,8 @@ async def lifespan(app: FastAPI):
         await state.cluster_manager.stop()
     if getattr(state, "headless_renderer", None):
         await state.headless_renderer.close()
+    if getattr(state, "terminal_session_manager", None):
+        await state.terminal_session_manager.shutdown()
     if getattr(state, "claude_session_manager", None):
         await state.claude_session_manager.shutdown()
     if getattr(state, "reminder_manager", None):
@@ -929,7 +1198,11 @@ async def lifespan(app: FastAPI):
         state.task_queue.stop_scheduler()
     if state.plugin_manager:
         await state.plugin_manager.shutdown_all()
-    if state.telegram_channel:
+    # Channel system shutdown (includes Telegram adapter + any future adapters)
+    if getattr(state, "channel_manager", None):
+        await state.channel_manager.stop_all()
+    elif state.telegram_channel:
+        # Fallback if channel_manager wasn't initialized
         await state.telegram_channel.stop()
     await dispose_engine()
 
@@ -944,7 +1217,9 @@ def create_app() -> FastAPI:
     # Import and include routers
     from admin import router as admin_router
     from routers import api as api_router_mod
+    from routers import channels as channels_router_mod
     from routers import frontend as frontend_router_mod
+    from routers import marketing as marketing_router_mod
     from routers import ws as ws_router_mod
 
     # Initialize frontend with base_dir
@@ -954,6 +1229,8 @@ def create_app() -> FastAPI:
 
     app.include_router(admin_router)
     app.include_router(api_router_mod.router)
+    app.include_router(channels_router_mod.router)
+    app.include_router(marketing_router_mod.router)
     app.include_router(ws_router_mod.router)
     app.include_router(frontend_router_mod.router)
 

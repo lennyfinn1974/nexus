@@ -56,3 +56,4 @@ backend/core/__pycache__/
 *.tmp
 *.bak
 *.backup
+models/

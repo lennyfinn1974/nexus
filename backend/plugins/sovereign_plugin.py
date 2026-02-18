@@ -119,9 +119,22 @@ class SovereignPlugin(NexusPlugin):
         """Register Sovereign AI tools."""
         self.add_tool(
             "sovereign_execute",
-            "Execute build/dev procedures: BLD:APP (full dev env + Claude Code), BLD:DEV (servers), BLD:TEST, BLD:STOP, ANZ:CODE, SYS:STATUS",
-            {"command": "Procedure command (e.g., 'BLD:APP', 'BLD:DEV', 'SYS:STATUS', 'BLD:STOP')"},
+            "Execute build/dev procedures: BLD:APP (full dev env + Claude Code), BLD:BUILD (conductor multi-agent build), BLD:DEV (servers), BLD:TEST, BLD:STOP, ANZ:CODE, SYS:STATUS",
+            {"command": "Procedure command (e.g., 'BLD:APP', 'BLD:BUILD <task>', 'BLD:DEV', 'SYS:STATUS', 'BLD:STOP')"},
             self._execute_command,
+            category="workspace",
+        )
+
+        self.add_tool(
+            "conductor_build",
+            "Start a conductor-orchestrated multi-agent build: plan → research → build → review → test. Reactive loops on review failure (max 3 cycles).",
+            {
+                "task": "What to build — be specific (e.g., 'Add REST API endpoints for user management with auth and tests')",
+                "builder_model": "Optional: model for builder agent (default: claude_code)",
+                "reviewer_model": "Optional: model for reviewer agent (default: claude_code)",
+                "auto_test": "Optional: run tests after build (default: true)",
+            },
+            self._conductor_build,
             category="workspace",
         )
 
@@ -207,6 +220,8 @@ class SovereignPlugin(NexusPlugin):
             # ── BLD: Build/Development Procedures ──
             if cmd == "BLD:APP":
                 return await self._bld_app(args)
+            elif cmd == "BLD:BUILD":
+                return await self._bld_build(args)
             elif cmd == "BLD:DEV":
                 return await self._bld_dev(args)
             elif cmd == "BLD:TEST":
@@ -233,10 +248,11 @@ class SovereignPlugin(NexusPlugin):
         return """📋 **Sovereign Commands**
 
 **Build:**
-  `BLD:APP [dir]`  — Full dev environment (Claude Code + tmux sessions)
-  `BLD:DEV [dir]`  — Dev server only (tmux sessions, no model switch)
-  `BLD:TEST [dir]` — Run test suite in project
-  `BLD:STOP`       — Tear down running procedures
+  `BLD:APP [dir]`    — Full dev environment (Claude Code + tmux sessions)
+  `BLD:BUILD <task>` — Conductor multi-agent build (plan→research→build→review→test)
+  `BLD:DEV [dir]`    — Dev server only (tmux sessions, no model switch)
+  `BLD:TEST [dir]`   — Run test suite in project
+  `BLD:STOP`         — Tear down running procedures
 
 **Analysis:**
   `ANZ:CODE [path]` — Analyse codebase structure
@@ -395,6 +411,93 @@ class SovereignPlugin(NexusPlugin):
         lines.append(f"   All terminal sessions are controllable via Nexus regardless of active model.")
 
         return "\n".join(lines)
+
+    async def _bld_build(self, args: str) -> str:
+        """BLD:BUILD <task> — Conductor-orchestrated multi-agent build.
+
+        Uses the OrchestratorConductor to run a full build cycle:
+        PLAN → RESEARCH → BUILD → REVIEW → FIX (if needed) → TEST
+
+        The conductor manages:
+        - Multiple Claude Code agents (builder, reviewer)
+        - Reactive loops (review fails → fix → review again, max 3 cycles)
+        - Git branch per build (merge on approval)
+        - Full event streaming to WebSocket/KanBan
+        """
+        task = args.strip()
+        if not task:
+            return (
+                "❌ BLD:BUILD requires a task description.\n"
+                "Usage: `BLD:BUILD Add REST API endpoints for user management with auth and tests`"
+            )
+
+        lines = ["🔨 **BLD:BUILD — Conductor Multi-Agent Build**\n"]
+        lines.append(f"📋 Task: {task[:200]}")
+
+        try:
+            from core.conductor import OrchestratorConductor, ConductorConfig
+
+            # Get the app state (injected during plugin setup)
+            state = getattr(self, '_app_state', None)
+            if not state:
+                # Try to get state from the router
+                state = getattr(self.router, 'state', None) if self.router else None
+
+            if not state:
+                return "❌ App state not available. Ensure BLD:APP is running first."
+
+            config = ConductorConfig()
+
+            # Get ws_id for streaming (use the first connected WebSocket)
+            ws_id = None
+            try:
+                from routers.ws import websocket_manager
+                for wid in list(websocket_manager.connections.keys()):
+                    ws_id = wid
+                    break
+            except Exception:
+                pass
+
+            conductor = OrchestratorConductor(
+                task=task,
+                state=state,
+                ws_id=ws_id,
+                config=config,
+            )
+
+            lines.append(f"🆔 Conductor: `{conductor.run.id}`")
+            lines.append(f"🤖 Builder: {config.builder_model}")
+            lines.append(f"👀 Reviewer: {config.reviewer_model}")
+            lines.append(f"🔄 Max cycles: {config.max_build_cycles}")
+            lines.append(f"📊 Min review score: {config.min_review_score}/10")
+            lines.append("\n⏳ **Build starting...** (follow progress in KanBan or chat)")
+
+            # Run the conductor (this blocks until complete)
+            result = await conductor.run_orchestration()
+
+            lines.append(f"\n{result}")
+            return "\n".join(lines)
+
+        except ImportError as e:
+            return f"❌ Conductor not available: {e}"
+        except Exception as e:
+            logger.exception(f"BLD:BUILD error")
+            return f"❌ Build failed: {e}"
+
+    async def _conductor_build(self, params) -> str:
+        """Tool handler for conductor_build — wraps BLD:BUILD for tool calling."""
+        task = params.get("task", "").strip()
+        if not task:
+            return "Error: task description is required"
+
+        # Build the args string with optional overrides
+        builder_model = params.get("builder_model", "").strip()
+        reviewer_model = params.get("reviewer_model", "").strip()
+        auto_test = params.get("auto_test", "true").strip().lower()
+
+        # For now, pass through to _bld_build
+        # Future: parse model overrides and pass to ConductorConfig
+        return await self._bld_build(task)
 
     async def _bld_dev(self, args: str) -> str:
         """BLD:DEV — Start dev servers without model switch."""

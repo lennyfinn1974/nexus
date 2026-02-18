@@ -610,6 +610,185 @@ SETTINGS_SCHEMA: list[dict] = [
         "description": "Cosine distance below this = duplicate. Strict (0.08) for business data, Loose (0.18) for creative content.",
         "options": ["0.08", "0.10", "0.12", "0.15", "0.18"],
     },
+    # ── Communications (Twilio + WhatsApp + SMS + Voice) ──
+    {
+        "key": "TWILIO_ACCOUNT_SID",
+        "default": "",
+        "encrypted": False,
+        "category": "Communications",
+        "label": "Twilio Account SID",
+        "type": "text",
+        "description": "Your Twilio Account SID from console.twilio.com",
+    },
+    {
+        "key": "TWILIO_AUTH_TOKEN",
+        "default": "",
+        "encrypted": True,
+        "category": "Communications",
+        "label": "Twilio Auth Token",
+        "type": "password",
+        "description": "Your Twilio Auth Token (encrypted in DB)",
+    },
+    {
+        "key": "TWILIO_PHONE_NUMBER",
+        "default": "",
+        "encrypted": False,
+        "category": "Communications",
+        "label": "Twilio Phone Number",
+        "type": "text",
+        "description": "Your Twilio phone number (E.164 format, e.g. +15551234567). Used for SMS and Voice.",
+    },
+    {
+        "key": "TWILIO_WHATSAPP_NUMBER",
+        "default": "",
+        "encrypted": False,
+        "category": "Communications",
+        "label": "WhatsApp Number",
+        "type": "text",
+        "description": "Your Twilio WhatsApp sender (e.g. whatsapp:+15551234567). Get this from Twilio Console → Messaging → WhatsApp Senders.",
+    },
+    {
+        "key": "TWILIO_WEBHOOK_BASE_URL",
+        "default": "",
+        "encrypted": False,
+        "category": "Communications",
+        "label": "Webhook Base URL",
+        "type": "text",
+        "description": "Public URL for Twilio webhooks (e.g. https://your-domain.com or ngrok URL). Twilio sends messages to {base_url}/api/channels/twilio/webhook",
+    },
+    {
+        "key": "WHATSAPP_ENABLED",
+        "default": "false",
+        "encrypted": False,
+        "category": "Communications",
+        "label": "WhatsApp Enabled",
+        "type": "select",
+        "description": "Enable WhatsApp messaging via Twilio. Requires Account SID, Auth Token, and WhatsApp Number.",
+        "options": ["false", "true"],
+    },
+    {
+        "key": "SMS_ENABLED",
+        "default": "false",
+        "encrypted": False,
+        "category": "Communications",
+        "label": "SMS Enabled",
+        "type": "select",
+        "description": "Enable SMS messaging via Twilio. Requires Account SID, Auth Token, and Phone Number.",
+        "options": ["false", "true"],
+    },
+    {
+        "key": "VOICE_ENABLED",
+        "default": "false",
+        "encrypted": False,
+        "category": "Communications",
+        "label": "Voice Calls Enabled",
+        "type": "select",
+        "description": "Enable inbound/outbound voice calls via Twilio (Phase C4).",
+        "options": ["false", "true"],
+    },
+    {
+        "key": "VOICE_GREETING",
+        "default": "Hello! You're connected to Nexus AI. How can I help you?",
+        "encrypted": False,
+        "category": "Communications",
+        "label": "Voice Greeting",
+        "type": "textarea",
+        "description": "Greeting message spoken when someone calls. Used by ElevenLabs TTS.",
+    },
+    {
+        "key": "ELEVENLABS_API_KEY",
+        "default": "",
+        "encrypted": True,
+        "category": "Communications",
+        "label": "ElevenLabs API Key",
+        "type": "password",
+        "description": "API key for ElevenLabs text-to-speech (voice calls + audio responses).",
+    },
+    {
+        "key": "ELEVENLABS_VOICE_ID",
+        "default": "",
+        "encrypted": False,
+        "category": "Communications",
+        "label": "ElevenLabs Voice ID",
+        "type": "text",
+        "description": "Default voice for TTS. Find voice IDs at elevenlabs.io/voice-library.",
+    },
+    {
+        "key": "DEEPGRAM_API_KEY",
+        "default": "",
+        "encrypted": True,
+        "category": "Communications",
+        "label": "Deepgram API Key",
+        "type": "password",
+        "description": "API key for Deepgram speech-to-text (voice calls + WhatsApp audio messages).",
+    },
+    # ── Marketing (Ayrshare + Mailchimp + SEO) ──
+    {
+        "key": "AYRSHARE_API_KEY",
+        "default": "",
+        "encrypted": True,
+        "category": "Marketing",
+        "label": "Ayrshare API Key",
+        "type": "password",
+        "description": "API key for Ayrshare social media management. Used for scheduling and publishing social posts.",
+    },
+    {
+        "key": "MAILCHIMP_API_KEY",
+        "default": "",
+        "encrypted": True,
+        "category": "Marketing",
+        "label": "Mailchimp API Key",
+        "type": "password",
+        "description": "API key for Mailchimp email marketing. Format: key-datacenter (e.g. abc123-us14).",
+    },
+    {
+        "key": "MAILCHIMP_SERVER_PREFIX",
+        "default": "",
+        "encrypted": False,
+        "category": "Marketing",
+        "label": "Mailchimp Server Prefix",
+        "type": "text",
+        "description": "Mailchimp data center prefix (e.g. us14). Found after the dash in your API key.",
+    },
+    {
+        "key": "MARKETING_ENABLED",
+        "default": "false",
+        "encrypted": False,
+        "category": "Marketing",
+        "label": "Marketing System Enabled",
+        "type": "select",
+        "description": "Enable the marketing framework (brand profiles, campaigns, content workflow).",
+        "options": ["false", "true"],
+    },
+    {
+        "key": "MARKETING_DEFAULT_BRAND_PROFILE",
+        "default": "",
+        "encrypted": False,
+        "category": "Marketing",
+        "label": "Default Brand Profile ID",
+        "type": "text",
+        "description": "ID of the default brand voice profile to use for content generation. Leave empty for none.",
+    },
+    {
+        "key": "MARKETING_AUTO_SCHEDULE",
+        "default": "false",
+        "encrypted": False,
+        "category": "Marketing",
+        "label": "Auto-Schedule Content",
+        "type": "select",
+        "description": "Automatically schedule approved content to optimal time slots based on platform analytics.",
+        "options": ["false", "true"],
+    },
+    {
+        "key": "MARKETING_APPROVAL_REQUIRED",
+        "default": "true",
+        "encrypted": False,
+        "category": "Marketing",
+        "label": "Human Approval Required",
+        "type": "select",
+        "description": "Require human approval before publishing AI-generated content. Strongly recommended.",
+        "options": ["true", "false"],
+    },
     # Setup
     {
         "key": "SETUP_COMPLETE",
@@ -639,6 +818,21 @@ CLUSTER_KEYS = {
     "REDIS_KEY_PREFIX", "CLUSTER_AGENT_ID", "CLUSTER_ROLE",
     "CLUSTER_MAX_LOAD", "CLUSTER_HEARTBEAT_INTERVAL", "CLUSTER_FAILURE_THRESHOLD",
     "CLUSTER_ELECTION_TIMEOUT", "CLUSTER_MIN_SECONDARIES",
+}
+
+# Keys whose change triggers channel adapter reconnection
+COMMS_KEYS = {
+    "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_PHONE_NUMBER",
+    "TWILIO_WHATSAPP_NUMBER", "TWILIO_WEBHOOK_BASE_URL",
+    "WHATSAPP_ENABLED", "SMS_ENABLED", "VOICE_ENABLED",
+    "ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID", "DEEPGRAM_API_KEY",
+}
+
+# Keys whose change triggers marketing system reconnection
+MARKETING_KEYS = {
+    "AYRSHARE_API_KEY", "MAILCHIMP_API_KEY", "MAILCHIMP_SERVER_PREFIX",
+    "MARKETING_ENABLED", "MARKETING_DEFAULT_BRAND_PROFILE",
+    "MARKETING_AUTO_SCHEDULE", "MARKETING_APPROVAL_REQUIRED",
 }
 
 
@@ -1031,6 +1225,60 @@ class ConfigManager:
     def has_telegram(self):
         return bool(self.telegram_bot_token)
 
+    # ── Communications (Twilio) ──
+
+    @property
+    def twilio_account_sid(self):
+        return self.get("TWILIO_ACCOUNT_SID")
+
+    @property
+    def twilio_auth_token(self):
+        return self.get("TWILIO_AUTH_TOKEN")
+
+    @property
+    def twilio_phone_number(self):
+        return self.get("TWILIO_PHONE_NUMBER")
+
+    @property
+    def twilio_whatsapp_number(self):
+        return self.get("TWILIO_WHATSAPP_NUMBER")
+
+    @property
+    def twilio_webhook_base_url(self):
+        return self.get("TWILIO_WEBHOOK_BASE_URL", "")
+
+    @property
+    def has_twilio(self):
+        return bool(self.twilio_account_sid and self.twilio_auth_token)
+
+    @property
+    def whatsapp_enabled(self):
+        return self.get_bool("WHATSAPP_ENABLED", False) and self.has_twilio
+
+    @property
+    def sms_enabled(self):
+        return self.get_bool("SMS_ENABLED", False) and self.has_twilio
+
+    @property
+    def voice_enabled(self):
+        return self.get_bool("VOICE_ENABLED", False) and self.has_twilio
+
+    @property
+    def voice_greeting(self):
+        return self.get("VOICE_GREETING", "Hello! You're connected to Nexus AI. How can I help you?")
+
+    @property
+    def elevenlabs_api_key(self):
+        return self.get("ELEVENLABS_API_KEY")
+
+    @property
+    def elevenlabs_voice_id(self):
+        return self.get("ELEVENLABS_VOICE_ID")
+
+    @property
+    def deepgram_api_key(self):
+        return self.get("DEEPGRAM_API_KEY")
+
     @property
     def setup_complete(self):
         return self.get_bool("SETUP_COMPLETE", False)
@@ -1135,3 +1383,33 @@ class ConfigManager:
             "CLUSTER_VECTOR_DIMS": int(self.get("EMBEDDING_DIMS", "768")),
             "MEMORY_DEDUP_THRESHOLD": float(self.get("MEMORY_DEDUP_THRESHOLD", "0.12")),
         }
+
+    # ── Marketing Properties ──────────────────────────────────────
+
+    @property
+    def marketing_enabled(self):
+        return self.get_bool("MARKETING_ENABLED", False)
+
+    @property
+    def ayrshare_api_key(self):
+        return self.get("AYRSHARE_API_KEY", "")
+
+    @property
+    def mailchimp_api_key(self):
+        return self.get("MAILCHIMP_API_KEY", "")
+
+    @property
+    def mailchimp_server_prefix(self):
+        return self.get("MAILCHIMP_SERVER_PREFIX", "")
+
+    @property
+    def marketing_default_brand_profile(self):
+        return self.get("MARKETING_DEFAULT_BRAND_PROFILE", "")
+
+    @property
+    def marketing_auto_schedule(self):
+        return self.get_bool("MARKETING_AUTO_SCHEDULE", False)
+
+    @property
+    def marketing_approval_required(self):
+        return self.get_bool("MARKETING_APPROVAL_REQUIRED", True)

@@ -362,6 +362,7 @@ class AgentRunner:
                 model=model_name, memory_context=memory_context,
                 rag_context=rag_context, kg_context=kg_context,
                 bulletin_context=bulletin_context,
+                app_state=s,
             )
 
             # ── Ollama: context as messages, not system prompt ──
@@ -375,6 +376,9 @@ class AgentRunner:
                     rag_context=rag_context,
                     kg_context=kg_context,
                     bulletin_context=bulletin_context,
+                    cfg=s.cfg,
+                    plugin_manager=s.plugin_manager,
+                    app_state=s,
                 )
                 if ctx_msgs:
                     # Insert context before the last user message

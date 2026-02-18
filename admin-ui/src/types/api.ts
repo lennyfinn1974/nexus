@@ -537,6 +537,89 @@ export interface KnowledgeGraphData {
   stats: Record<string, unknown>
 }
 
+// ── Marketing ──
+
+export interface BrandProfile {
+  id: number
+  name: string
+  tone: string
+  vocabulary_rules: {
+    preferred?: string[]
+    banned?: string[]
+  }
+  examples: Array<{ platform: string; text: string }>
+  platform_guidelines: Record<string, string>
+  is_default: boolean
+  org_id: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface MarketingCampaign {
+  id: string
+  name: string
+  status: 'planning' | 'active' | 'paused' | 'completed' | 'cancelled'
+  campaign_type: string
+  budget_usd: number
+  spent_usd: number
+  start_date: string | null
+  end_date: string | null
+  goals: Record<string, number>
+  strategy: string
+  brand_profile_id: number | null
+  org_id: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface CampaignSummary extends MarketingCampaign {
+  content_counts: Record<string, number>
+  budget_remaining: number
+  budget_utilization: number
+}
+
+export interface ContentItem {
+  id: string
+  campaign_id: string | null
+  content_type: string
+  platform: string
+  status: 'draft' | 'review' | 'approved' | 'scheduled' | 'published' | 'failed' | 'archived'
+  title: string
+  body: string
+  media_urls: string[]
+  scheduled_at: string | null
+  published_at: string | null
+  external_id: string
+  metrics: Record<string, unknown>
+  brand_profile_id: number | null
+  created_by: string
+  approved_by: string
+  org_id: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface CalendarEvent {
+  id: string
+  campaign_id: string | null
+  content_item_id: string | null
+  event_type: string
+  title: string
+  scheduled_at: string
+}
+
+export interface MarketingAnalytics {
+  metrics: Record<string, unknown>
+  period_days: number
+  source: string | null
+}
+
+export interface PlatformConnection {
+  name: string
+  connected: boolean
+  last_synced: string | null
+}
+
 // ── Setup ──
 export interface SetupStatusResponse {
   setup_complete: boolean
