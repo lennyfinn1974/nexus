@@ -1891,6 +1891,7 @@ async def get_metrics_dashboard():
     dashboard = metrics.dashboard()
 
     # Enrich with subsystem stats
+    app_state = _get_app_state()
     if app_state:
         rag = getattr(app_state, "rag_pipeline", None)
         if rag:
@@ -1929,6 +1930,7 @@ async def get_memory_health():
     """
     result: dict = {"status": "no_memory_index"}
 
+    app_state = _get_app_state()
     if not app_state:
         return JSONResponse(result)
 
