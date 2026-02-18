@@ -20,6 +20,7 @@ import SkillsPage from '@/pages/skills'
 import WorkstreamsPage from '@/pages/workstreams'
 import ClusterPage from '@/pages/cluster'
 import MemoryPage from '@/pages/memory'
+import MetricsPage from '@/pages/metrics'
 
 function RequireAuth() {
   const { isAuthenticated } = useAuth()
@@ -64,6 +65,7 @@ export default function AppRouter() {
           <Route path="workstreams" element={<WorkstreamsPage />} />
           <Route path="cluster" element={<ClusterPage />} />
           <Route path="memory" element={<MemoryPage />} />
+          <Route path="metrics" element={<MetricsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/admin" replace />} />
       </Routes>

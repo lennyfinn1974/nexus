@@ -87,6 +87,20 @@ export const useSkills = () =>
 export const useSkillPacks = () =>
   useQuery({ queryKey: ['admin', 'skill-packs'], queryFn: () => api.get<SkillPack[]>('/admin/skills/packs') })
 
+export const useMetrics = (refetchInterval = 30000) =>
+  useQuery({
+    queryKey: ['admin', 'metrics'],
+    queryFn: () => api.get<Record<string, any>>('/admin/metrics'),
+    refetchInterval,
+  })
+
+export const useMemoryHealth = (refetchInterval = 60000) =>
+  useQuery({
+    queryKey: ['admin', 'memory-health'],
+    queryFn: () => api.get<Record<string, any>>('/admin/memory/health'),
+    refetchInterval,
+  })
+
 // ── Mutations ──
 
 export function useUpdateSettings() {

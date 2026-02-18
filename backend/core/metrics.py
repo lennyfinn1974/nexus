@@ -116,7 +116,8 @@ class MetricsCollector:
         latency = {}
         for metric in ("rag_retrieve", "model_inference", "tool_execution",
                         "total_turn", "embed", "kg_extraction",
-                        "memory_ingest", "fts_search"):
+                        "memory_ingest", "memory_prune", "memory_archive",
+                        "fts_search", "ws_message", "db_query"):
             p = self.percentiles(metric)
             if p["count"] > 0:
                 latency[metric] = p
@@ -128,10 +129,14 @@ class MetricsCollector:
                 "total_turns": self.get_count("turns"),
                 "total_tool_calls": self.get_count("tool_calls"),
                 "tool_errors": self.get_count("tool_errors"),
+                "tool_timeouts": self.get_count("tool_timeouts"),
+                "idempotency_hits": self.get_count("idempotency_hits"),
                 "failovers": self.get_count("failovers"),
                 "ollama_calls": self.get_count("ollama_calls"),
                 "claude_calls": self.get_count("claude_calls"),
                 "claude_code_calls": self.get_count("claude_code_calls"),
                 "aborts": self.get_count("aborts"),
+                "memories_pruned": self.get_count("memories_pruned"),
+                "memories_archived": self.get_count("memories_archived"),
             },
         }

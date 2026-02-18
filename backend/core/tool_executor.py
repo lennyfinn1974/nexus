@@ -377,6 +377,8 @@ class ToolExecutor:
             if cached is not None:
                 data = json.loads(cached)
                 logger.info(f"Idempotency cache hit: {tool_name} key={idem_key[:12]}")
+                from core.metrics import get_metrics
+                get_metrics().record_count("idempotency_hits")
                 return ToolResult(**data)
         else:
             idem_key = None

@@ -1919,3 +1919,86 @@ async def get_metrics_dashboard():
                 pass
 
     return JSONResponse(dashboard)
+
+
+@router.get("/memory/health")
+async def get_memory_health():
+    """Memory health dashboard — active/archived counts, age distribution, top accessed.
+
+    Returns comprehensive memory system health data for the admin dashboard.
+    """
+    result: dict = {"status": "no_memory_index"}
+
+    if not app_state:
+        return JSONResponse(result)
+
+    cm = getattr(app_state, "cluster_manager", None)
+    sf = getattr(app_state, "session_factory", None)
+
+    if not cm or not cm.memory_index:
+        return JSONResponse(result)
+
+    idx = cm.memory_index
+    import time
+
+    try:
+        # Active memory stats
+        total = await idx.count_memories()
+        types = await idx.get_memory_types()
+        result = {
+            "status": "ok",
+            "backend": idx._backend,
+            "total_active": total,
+            "by_type": types,
+        }
+
+        # Age distribution
+        all_mems = await idx.scan_all_with_access()
+        now = time.time()
+        age_buckets = {"0-7d": 0, "7-30d": 0, "30-90d": 0, "90d+": 0}
+        importances = []
+        for mem in all_mems:
+            created = float(mem.get("created_at", 0))
+            days = (now - created) / 86400.0 if created else 999
+            if days <= 7:
+                age_buckets["0-7d"] += 1
+            elif days <= 30:
+                age_buckets["7-30d"] += 1
+            elif days <= 90:
+                age_buckets["30-90d"] += 1
+            else:
+                age_buckets["90d+"] += 1
+
+            importances.append(idx.compute_importance(mem))
+
+        result["age_distribution"] = age_buckets
+
+        if importances:
+            importances.sort(reverse=True)
+            result["avg_importance"] = round(sum(importances) / len(importances), 4)
+            result["top_importance"] = round(importances[0], 4) if importances else 0
+            result["bottom_importance"] = round(importances[-1], 4) if importances else 0
+
+        # Top 10 most accessed
+        all_mems.sort(key=lambda m: int(m.get("access_count", 0)), reverse=True)
+        result["top_accessed"] = [
+            {"id": m["id"], "type": m.get("memory_type", ""), "access_count": int(m.get("access_count", 0))}
+            for m in all_mems[:10]
+        ]
+
+        # Dedup stats
+        result["dedup_threshold"] = idx.dedup_threshold
+        result["duplicates_blocked"] = idx._duplicates_found
+
+        # Archive stats
+        if sf:
+            try:
+                archive_stats = await idx.get_archive_stats(session_factory=sf)
+                result["archived"] = archive_stats
+            except Exception:
+                result["archived"] = {"archived_count": 0}
+
+    except Exception as e:
+        result["error"] = str(e)
+
+    return JSONResponse(result)

@@ -19,6 +19,7 @@ const pageTitles: Record<string, string> = {
   '/admin/workstreams': 'Work Streams',
   '/admin/cluster': 'Agent Cluster',
   '/admin/memory': 'Memory & Knowledge',
+  '/admin/metrics': 'Metrics & Observability',
 }
 
 export default function AppShell({ children }: { children: ReactNode }) {
