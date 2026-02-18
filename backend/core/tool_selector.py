@@ -32,6 +32,14 @@ CATEGORY_PATTERNS: dict[str, list[tuple[str, int]]] = {
         (r"\b(how does|how do|what are|why is|why does)\b", 2),
         (r"\b(can you|could you|would you)\b.*\b(tell|explain|describe|help me understand)\b", 2),
         (r"\b(my|your) (opinion|thoughts|take)\b", 2),
+        # Greetings and social / status check — never needs tools
+        (r"^(hi|hello|hey|good (morning|afternoon|evening)|morning|greetings)\b", 4),
+        (r"\bhow are you\b", 4),
+        (r"\b(what'?s up|how'?s? it going|how do you do|how'?s everything|how is it going)\b", 4),
+        (r"\b(thank you|thanks|cheers|appreciate|great job|well done|nice work)\b", 3),
+        (r"\b(check.?in|checking in|just saying hi|quick hello)\b", 3),
+        (r"^(yes|no|ok|okay|sure|yep|nope|agreed|exactly|right|correct)\b", 3),
+        (r"^(bye|goodbye|see you|later|good night|night|gn)\b", 3),
         # Conversational continuity — referencing previous context
         (r"\b(shall we|let'?s|can we)\b.*\b(try|test|check|go|continue|revisit)\b", 3),
         (r"\bfrom (before|earlier|last time|yesterday|the other day)\b", 3),
@@ -68,10 +76,11 @@ CATEGORY_PATTERNS: dict[str, list[tuple[str, int]]] = {
         (r"\b(ollama|model|local model)\b", 1),
     ],
     "files": [
-        (r"\b(read file|write file|edit file|create file)\b", 3),
+        (r"\b(read|write|edit|create|open|view|show|cat)\b.{0,20}\b(file|document)\b", 3),
         (r"\b(list directory|list files|ls |dir )\b", 2),
         (r"\b(search files|find file|locate file|file info)\b", 2),
         (r"\b(move file|copy file|delete file|rename file)\b", 2),
+        (r"\b(what files|which files|files in)\b", 2),
         (r"\b\w+\.(py|js|ts|json|yaml|yml|md|txt|csv|html|css)\b", 1),
     ],
     "code": [

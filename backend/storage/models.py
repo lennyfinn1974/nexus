@@ -1,10 +1,11 @@
 """SQLAlchemy ORM models for Nexus.
 
-All 20 tables: 12 core (conversations, messages, skills, tasks, settings,
+All 22 tables: 14 core (conversations, messages, skills, tasks, settings,
 settings_audit, user_preferences, project_contexts, interaction_patterns,
-session_contexts, knowledge_associations, user_goals) plus 6 auth/security
-tables (users, whitelist, sessions, blocked_ips, auth_audit, rate_limits)
-plus 2 Telegram pairing tables (telegram_pairings, pairing_codes).
+session_contexts, knowledge_associations, user_goals, kg_entities,
+kg_relationships) plus 6 auth/security tables (users, whitelist, sessions,
+blocked_ips, auth_audit, rate_limits) plus 2 Telegram pairing tables
+(telegram_pairings, pairing_codes).
 """
 
 from datetime import datetime, timezone
@@ -233,6 +234,48 @@ class KnowledgeAssociation(Base):
     reinforced_count = Column(Integer, default=1)
 
     __table_args__ = (Index("idx_knowledge_concepts", "from_concept", "to_concept"),)
+
+
+class KGEntity(Base):
+    """Knowledge Graph entity with typed properties."""
+    __tablename__ = "kg_entities"
+
+    id = Column(String(16), primary_key=True)
+    name = Column(String, nullable=False)
+    entity_type = Column(String(32), nullable=False)
+    properties = Column(JSONB, default=dict)
+    mention_count = Column(Integer, default=1)
+    first_seen = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    last_seen = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        Index("idx_kg_entity_type", "entity_type"),
+        Index("idx_kg_entity_name", "name"),
+    )
+
+
+class KGRelationship(Base):
+    """Knowledge Graph relationship (edge) with temporal validity."""
+    __tablename__ = "kg_relationships"
+
+    id = Column(String(16), primary_key=True)
+    from_entity_id = Column(String(16), nullable=False)
+    to_entity_id = Column(String(16), nullable=False)
+    rel_type = Column(String(32), nullable=False)
+    properties = Column(JSONB, default=dict)
+    strength = Column(Float, default=1.0)
+    mention_count = Column(Integer, default=1)
+    valid_from = Column(DateTime(timezone=True), nullable=True)
+    valid_until = Column(DateTime(timezone=True), nullable=True)
+    superseded_by = Column(String(16), nullable=True)  # Contradicts edge: points to newer relationship
+    first_seen = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    last_seen = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        Index("idx_kg_rel_from", "from_entity_id"),
+        Index("idx_kg_rel_to", "to_entity_id"),
+        Index("idx_kg_rel_type", "rel_type"),
+    )
 
 
 class UserGoal(Base):

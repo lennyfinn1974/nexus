@@ -209,6 +209,17 @@ async def _handle_cleanup_task(payload: dict, state: AppState) -> str:
     return msg
 
 
+async def _handle_kg_save_task(payload: dict, state: AppState) -> str:
+    """Periodic task: persist dirty knowledge graph items to PostgreSQL."""
+    kg = getattr(state, "knowledge_graph", None)
+    if not kg:
+        return "KG not active"
+    saved = await kg.save_to_db()
+    if saved > 0:
+        logger.info(f"KG periodic save: {saved} items persisted")
+    return f"KG save: {saved} items"
+
+
 async def _handle_ingest_task(payload: dict, state: AppState) -> str:
     file_path = payload.get("path", "")
     filename = payload.get("name", os.path.basename(file_path))
@@ -460,6 +471,7 @@ async def lifespan(app: FastAPI):
     state.task_queue.register_handler("research", lambda p: _handle_research_task(p, state))
     state.task_queue.register_handler("ingest", lambda p: _handle_ingest_task(p, state))
     state.task_queue.register_handler("cleanup", lambda p: _handle_cleanup_task(p, state))
+    state.task_queue.register_handler("kg_save", lambda p: _handle_kg_save_task(p, state))
 
     # Connect task queue to distributed stream if clustering is active
     if state.cluster_manager and state.cluster_manager.task_stream:
@@ -479,6 +491,13 @@ async def lifespan(app: FastAPI):
         task_type="cleanup",
         interval_seconds=6 * 60 * 60,  # Every 6 hours
         payload={"days": 7},
+        enabled=True,
+    )
+    state.task_queue.register_periodic(
+        name="kg_persist",
+        task_type="kg_save",
+        interval_seconds=5 * 60,  # Every 5 minutes
+        payload={},
         enabled=True,
     )
     state.task_queue.start_scheduler()
@@ -769,6 +788,15 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ──
     logger.info("Shutting down...")
+    # Save KG dirty items before anything else shuts down
+    kg = getattr(state, "knowledge_graph", None)
+    if kg:
+        try:
+            saved = await kg.save_to_db()
+            if saved > 0:
+                logger.info(f"KG shutdown save: {saved} items persisted")
+        except Exception as e:
+            logger.warning(f"KG shutdown save failed: {e}")
     if getattr(state, "embedding_service", None):
         await state.embedding_service.close()
     if getattr(state, "cluster_manager", None):

@@ -19,20 +19,19 @@ class ClaudeClient:
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
 
     async def is_available(self) -> bool:
-        """Check if the API key is valid."""
-        try:
-            await self._client.messages.create(
-                model=self.model,
-                max_tokens=10,
-                messages=[{"role": "user", "content": "ping"}],
-            )
-            return True
-        except anthropic.AuthenticationError:
-            logger.error("Anthropic API key is invalid")
+        """Check if the API key looks valid without consuming tokens.
+
+        Validates key format (sk-ant-*) instead of sending a real chat
+        request. The old approach sent 'ping' to the API on every server
+        startup, wasting tokens. Auth errors will surface naturally on
+        the first real user request and trigger failover.
+        """
+        api_key = self._client.api_key or ""
+        if not api_key or not api_key.startswith("sk-ant-"):
+            logger.error("Anthropic API key missing or invalid format")
             return False
-        except Exception as e:
-            logger.warning(f"Claude availability check failed: {e}")
-            return False
+        logger.info("Claude API key configured (format validated)")
+        return True
 
     async def chat(
         self,

@@ -1170,6 +1170,149 @@ async def get_kg_entity(name: str):
     })
 
 
+@router.get("/memory/knowledge-graph/search")
+async def kg_search(q: str = "", type: str = "", limit: int = 20):
+    """Search knowledge graph entities by name and/or type."""
+    app_state = _get_app_state()
+    kg = getattr(app_state, "knowledge_graph", None) if app_state else None
+    if not kg:
+        return JSONResponse({"error": "Knowledge graph not active", "entities": []})
+
+    entities = kg.search_entities(query=q, entity_type=type, limit=limit)
+    return JSONResponse({
+        "query": q,
+        "type_filter": type,
+        "entities": [e.to_dict() for e in entities],
+        "total": len(entities),
+    })
+
+
+@router.get("/memory/knowledge-graph/entity-by-id/{entity_id}/relationships")
+async def kg_entity_relationships(entity_id: str, rel_type: str = ""):
+    """Get all current relationships for an entity."""
+    app_state = _get_app_state()
+    kg = getattr(app_state, "knowledge_graph", None) if app_state else None
+    if not kg:
+        return JSONResponse({"error": "Knowledge graph not active"}, status_code=404)
+
+    entity = kg._entities.get(entity_id)
+    if not entity:
+        return JSONResponse({"error": f"Entity '{entity_id}' not found"}, status_code=404)
+
+    rels = kg.get_current_relationships(entity_id, rel_type=rel_type or None)
+    results = []
+    for rel in rels:
+        other_id = rel.target_id if rel.source_id == entity_id else rel.source_id
+        other = kg._entities.get(other_id)
+        results.append({
+            "relationship": rel.to_dict(),
+            "entity": other.to_dict() if other else None,
+        })
+
+    return JSONResponse({
+        "entity": entity.to_dict(),
+        "relationships": results,
+        "total": len(results),
+    })
+
+
+@router.get("/memory/knowledge-graph/entity-by-id/{entity_id}/history")
+async def kg_entity_history(entity_id: str):
+    """Get full temporal history of an entity's relationships (including superseded)."""
+    app_state = _get_app_state()
+    kg = getattr(app_state, "knowledge_graph", None) if app_state else None
+    if not kg:
+        return JSONResponse({"error": "Knowledge graph not active"}, status_code=404)
+
+    entity = kg._entities.get(entity_id)
+    if not entity:
+        return JSONResponse({"error": f"Entity '{entity_id}' not found"}, status_code=404)
+
+    history = kg.get_entity_history(entity_id)
+    return JSONResponse({
+        "entity": entity.to_dict(),
+        "history": history,
+        "total": len(history),
+    })
+
+
+@router.get("/memory/knowledge-graph/path")
+async def kg_find_path(from_id: str = "", to_id: str = "", from_name: str = "", to_name: str = ""):
+    """Find shortest path between two entities."""
+    app_state = _get_app_state()
+    kg = getattr(app_state, "knowledge_graph", None) if app_state else None
+    if not kg:
+        return JSONResponse({"error": "Knowledge graph not active"}, status_code=404)
+
+    # Resolve by name if IDs not provided
+    if not from_id and from_name:
+        entity = kg.get_entity(from_name)
+        from_id = entity.id if entity else ""
+    if not to_id and to_name:
+        entity = kg.get_entity(to_name)
+        to_id = entity.id if entity else ""
+
+    if not from_id or not to_id:
+        return JSONResponse({"error": "Both from and to entities required"}, status_code=400)
+
+    path = kg.find_path(from_id, to_id)
+    if not path:
+        return JSONResponse({"path": [], "found": False})
+
+    path_data = []
+    for entity, rel in path:
+        path_data.append({
+            "entity": entity.to_dict(),
+            "relationship": rel.to_dict(),
+        })
+
+    return JSONResponse({
+        "path": path_data,
+        "found": True,
+        "length": len(path),
+    })
+
+
+@router.get("/memory/knowledge-graph/stats")
+async def kg_stats():
+    """Get detailed knowledge graph statistics."""
+    app_state = _get_app_state()
+    kg = getattr(app_state, "knowledge_graph", None) if app_state else None
+    if not kg:
+        return JSONResponse({"error": "Knowledge graph not active"}, status_code=404)
+
+    return JSONResponse(kg.get_stats())
+
+
+@router.post("/memory/knowledge-graph/save")
+async def kg_save():
+    """Trigger an immediate KG save to PostgreSQL."""
+    app_state = _get_app_state()
+    kg = getattr(app_state, "knowledge_graph", None) if app_state else None
+    if not kg:
+        return JSONResponse({"error": "Knowledge graph not active"}, status_code=404)
+
+    saved = await kg.save_to_db()
+    return JSONResponse({"saved": saved, "status": "ok"})
+
+
+@router.get("/memory/knowledge-graph/property-lookup")
+async def kg_property_lookup(prop: str, value: str):
+    """Reverse lookup: find entities with a specific property value."""
+    app_state = _get_app_state()
+    kg = getattr(app_state, "knowledge_graph", None) if app_state else None
+    if not kg:
+        return JSONResponse({"error": "Knowledge graph not active"}, status_code=404)
+
+    entities = kg.get_entity_by_property(prop, value)
+    return JSONResponse({
+        "property": prop,
+        "value": value,
+        "entities": [e.to_dict() for e in entities],
+        "total": len(entities),
+    })
+
+
 @router.get("/memory/rag/search")
 async def rag_search(q: str, limit: int = 5):
     """Search the RAG memory index."""
