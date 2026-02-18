@@ -1,11 +1,14 @@
 """SQLAlchemy ORM models for Nexus.
 
-All 22 tables: 14 core (conversations, messages, skills, tasks, settings,
+All 22+ tables: 14 core (conversations, messages, skills, tasks, settings,
 settings_audit, user_preferences, project_contexts, interaction_patterns,
 session_contexts, knowledge_associations, user_goals, kg_entities,
 kg_relationships) plus 6 auth/security tables (users, whitelist, sessions,
 blocked_ips, auth_audit, rate_limits) plus 2 Telegram pairing tables
-(telegram_pairings, pairing_codes).
+(telegram_pairings, pairing_codes) plus archived_memories.
+
+Multi-tenant: Most core tables have an `org_id` column (DEFAULT 'default')
+for tenant isolation. Single-tenant mode uses org_id='default' throughout.
 """
 
 from datetime import datetime, timezone
@@ -41,11 +44,16 @@ class Conversation(Base):
     __tablename__ = "conversations"
 
     id = Column(String, primary_key=True)
+    org_id = Column(String(64), nullable=False, default="default", index=True)
     title = Column(String, nullable=False, default="New Conversation")
     created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow)
 
     messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_conversations_org", "org_id", "updated_at"),
+    )
 
 
 class Message(Base):
@@ -127,11 +135,16 @@ class Setting(Base):
     __tablename__ = "settings"
 
     key = Column(String, primary_key=True)
+    org_id = Column(String(64), nullable=False, default="default")
     value = Column(Text, nullable=False, default="")
     encrypted = Column(Boolean, nullable=False, default=False)
     category = Column(String, nullable=False, default="general")
     updated_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
     updated_by = Column(String, nullable=False, default="system")
+
+    __table_args__ = (
+        Index("idx_settings_org", "org_id", "category"),
+    )
 
 
 class SettingsAudit(Base):
@@ -152,6 +165,7 @@ class UserPreferenceModel(Base):
     __tablename__ = "user_preferences"
 
     key = Column(String, primary_key=True)
+    org_id = Column(String(64), nullable=False, default="default")
     value = Column(Text, nullable=False)
     category = Column(String, nullable=False)
     confidence = Column(Float, default=1.0)
@@ -159,13 +173,17 @@ class UserPreferenceModel(Base):
     first_learned = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
     last_updated = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
 
-    __table_args__ = (Index("idx_preferences_category", "category"),)
+    __table_args__ = (
+        Index("idx_preferences_category", "category"),
+        Index("idx_preferences_org", "org_id", "category"),
+    )
 
 
 class ProjectContextModel(Base):
     __tablename__ = "project_contexts"
 
     project_id = Column(String, primary_key=True)
+    org_id = Column(String(64), nullable=False, default="default")
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     status = Column(String, default="active")
@@ -181,6 +199,7 @@ class ProjectContextModel(Base):
         CheckConstraint("status IN ('active', 'paused', 'completed', 'archived')", name="ck_projects_status"),
         CheckConstraint("priority BETWEEN 1 AND 5", name="ck_projects_priority"),
         Index("idx_projects_status", "status", "last_worked"),
+        Index("idx_projects_org", "org_id", "status"),
     )
 
 
@@ -188,6 +207,7 @@ class InteractionPatternModel(Base):
     __tablename__ = "interaction_patterns"
 
     pattern_id = Column(String, primary_key=True)
+    org_id = Column(String(64), nullable=False, default="default")
     description = Column(Text, nullable=False)
     triggers = Column(JSONB, nullable=False)
     success_rate = Column(Float, default=1.0)
@@ -197,13 +217,17 @@ class InteractionPatternModel(Base):
     last_seen = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
     metadata_ = Column("metadata", JSONB, nullable=True)
 
-    __table_args__ = (Index("idx_patterns_type", "context_type", "frequency"),)
+    __table_args__ = (
+        Index("idx_patterns_type", "context_type", "frequency"),
+        Index("idx_patterns_org", "org_id", "context_type"),
+    )
 
 
 class SessionContextModel(Base):
     __tablename__ = "session_contexts"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(String(64), nullable=False, default="default")
     session_id = Column(String, nullable=False)
     conversation_id = Column(String, nullable=True)
     start_time = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
@@ -218,13 +242,17 @@ class SessionContextModel(Base):
     challenges_faced = Column(JSONB, nullable=True)
     continuation_context = Column(Text, nullable=True)
 
-    __table_args__ = (Index("idx_sessions_time", "start_time", "conversation_id"),)
+    __table_args__ = (
+        Index("idx_sessions_time", "start_time", "conversation_id"),
+        Index("idx_sessions_org", "org_id", "start_time"),
+    )
 
 
 class KnowledgeAssociation(Base):
     __tablename__ = "knowledge_associations"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(String(64), nullable=False, default="default")
     from_concept = Column(String, nullable=False)
     to_concept = Column(String, nullable=False)
     relationship_type = Column(String, nullable=False)
@@ -233,7 +261,10 @@ class KnowledgeAssociation(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
     reinforced_count = Column(Integer, default=1)
 
-    __table_args__ = (Index("idx_knowledge_concepts", "from_concept", "to_concept"),)
+    __table_args__ = (
+        Index("idx_knowledge_concepts", "from_concept", "to_concept"),
+        Index("idx_knowledge_org", "org_id"),
+    )
 
 
 class KGEntity(Base):
@@ -241,6 +272,7 @@ class KGEntity(Base):
     __tablename__ = "kg_entities"
 
     id = Column(String(16), primary_key=True)
+    org_id = Column(String(64), nullable=False, default="default")
     name = Column(String, nullable=False)
     entity_type = Column(String(32), nullable=False)
     properties = Column(JSONB, default=dict)
@@ -251,6 +283,7 @@ class KGEntity(Base):
     __table_args__ = (
         Index("idx_kg_entity_type", "entity_type"),
         Index("idx_kg_entity_name", "name"),
+        Index("idx_kg_entity_org", "org_id", "entity_type"),
     )
 
 
@@ -259,6 +292,7 @@ class KGRelationship(Base):
     __tablename__ = "kg_relationships"
 
     id = Column(String(16), primary_key=True)
+    org_id = Column(String(64), nullable=False, default="default")
     from_entity_id = Column(String(16), nullable=False)
     to_entity_id = Column(String(16), nullable=False)
     rel_type = Column(String(32), nullable=False)
@@ -275,6 +309,7 @@ class KGRelationship(Base):
         Index("idx_kg_rel_from", "from_entity_id"),
         Index("idx_kg_rel_to", "to_entity_id"),
         Index("idx_kg_rel_type", "rel_type"),
+        Index("idx_kg_rel_org", "org_id"),
     )
 
 
@@ -282,6 +317,7 @@ class UserGoal(Base):
     __tablename__ = "user_goals"
 
     goal_id = Column(String, primary_key=True)
+    org_id = Column(String(64), nullable=False, default="default")
     title = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     goal_type = Column(String, default="general")
@@ -297,6 +333,7 @@ class UserGoal(Base):
     __table_args__ = (
         CheckConstraint("status IN ('active', 'paused', 'achieved', 'abandoned')", name="ck_goals_status"),
         Index("idx_goals_status", "status", "target_date"),
+        Index("idx_goals_org", "org_id", "status"),
     )
 
 
@@ -411,6 +448,7 @@ class ArchivedMemory(Base):
     __tablename__ = "archived_memories"
 
     id = Column(String, primary_key=True)
+    org_id = Column(String(64), nullable=False, default="default")
     text = Column(Text, nullable=False)
     memory_type = Column(String, nullable=False, default="general")
     source_agent = Column(String, nullable=True)
@@ -424,6 +462,7 @@ class ArchivedMemory(Base):
     __table_args__ = (
         Index("idx_archived_mem_type", "memory_type"),
         Index("idx_archived_mem_date", "archived_at"),
+        Index("idx_archived_mem_org", "org_id", "memory_type"),
     )
 
 

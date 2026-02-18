@@ -3,6 +3,9 @@
 Uses SQLAlchemy async sessions (one session per method call).
 Public API is identical to the original aiosqlite version — all methods
 return plain dicts with ISO-formatted datetime strings.
+
+Multi-tenant: Most methods accept an optional `org_id` parameter
+(defaults to "default" for single-tenant backward compatibility).
 """
 
 import json
@@ -17,6 +20,8 @@ from storage.models import (
 )
 
 logger = logging.getLogger("nexus.storage")
+
+DEFAULT_ORG = "default"
 
 
 def _dt_to_iso(dt: Optional[datetime]) -> Optional[str]:
@@ -71,17 +76,18 @@ class Database:
 
     # ── Conversations ────────────────────────────────────────────
 
-    async def create_conversation(self, conv_id: str, title: str = "New Conversation") -> dict:
+    async def create_conversation(self, conv_id: str, title: str = "New Conversation", org_id: str = DEFAULT_ORG) -> dict:
         now = datetime.now(timezone.utc)
         async with self._session_factory() as session:
-            conv = Conversation(id=conv_id, title=title, created_at=now, updated_at=now)
+            conv = Conversation(id=conv_id, title=title, org_id=org_id, created_at=now, updated_at=now)
             session.add(conv)
             await session.commit()
         return {"id": conv_id, "title": title, "created_at": now.isoformat()}
 
-    async def list_conversations(self, limit: int = 50) -> list[dict]:
+    async def list_conversations(self, limit: int = 50, org_id: str = DEFAULT_ORG) -> list[dict]:
         async with self._session_factory() as session:
-            result = await session.execute(select(Conversation).order_by(Conversation.updated_at.desc()).limit(limit))
+            stmt = select(Conversation).where(Conversation.org_id == org_id).order_by(Conversation.updated_at.desc()).limit(limit)
+            result = await session.execute(stmt)
             rows = result.scalars().all()
             return [_row_to_dict(r, _CONV_COLS) for r in rows]
 
@@ -311,6 +317,7 @@ class Database:
             await session.execute(text("""
                 CREATE TABLE IF NOT EXISTS work_items (
                     id VARCHAR PRIMARY KEY,
+                    org_id VARCHAR(64) NOT NULL DEFAULT 'default',
                     kind VARCHAR NOT NULL,
                     title VARCHAR NOT NULL,
                     status VARCHAR NOT NULL DEFAULT 'pending',
@@ -332,6 +339,9 @@ class Database:
             await session.execute(text(
                 "CREATE INDEX IF NOT EXISTS idx_work_items_conv ON work_items (conv_id)"
             ))
+            await session.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_work_items_org ON work_items (org_id, status)"
+            ))
             await session.commit()
         logger.info("Ensured work_items table exists")
 
@@ -345,6 +355,7 @@ class Database:
         conv_id: str = None,
         model: str = None,
         metadata: dict = None,
+        org_id: str = DEFAULT_ORG,
     ) -> dict:
         """Insert or update a work item.
 
@@ -359,8 +370,8 @@ class Database:
         started_ts = now if status == "running" else None
         async with self._session_factory() as session:
             await session.execute(text("""
-                INSERT INTO work_items (id, kind, title, status, parent_id, conv_id, model, metadata, created_at, started_at)
-                VALUES (:id, :kind, :title, :status, :parent_id, :conv_id, :model,
+                INSERT INTO work_items (id, org_id, kind, title, status, parent_id, conv_id, model, metadata, created_at, started_at)
+                VALUES (:id, :org_id, :kind, :title, :status, :parent_id, :conv_id, :model,
                         CAST(:metadata AS jsonb), :created_ts, :started_ts)
                 ON CONFLICT (id) DO UPDATE SET
                     title = EXCLUDED.title,
@@ -373,7 +384,7 @@ class Database:
                     completed_at = CASE WHEN EXCLUDED.status IN ('completed', 'failed', 'cancelled')
                                         THEN :upsert_now ELSE work_items.completed_at END
             """), {
-                "id": item_id, "kind": kind, "title": title, "status": status,
+                "id": item_id, "org_id": org_id, "kind": kind, "title": title, "status": status,
                 "parent_id": parent_id, "conv_id": conv_id,
                 "model": model, "metadata": meta_json,
                 "created_ts": now, "started_ts": started_ts, "upsert_now": now,
@@ -763,6 +774,42 @@ class Database:
             )
             await session.commit()
             return result.rowcount
+
+    # ── Tenant Migration ────────────────────────────────────────────
+
+    async def ensure_org_id_columns(self) -> None:
+        """Add org_id columns to existing tables for multi-tenant support.
+
+        Safe to call repeatedly — uses IF NOT EXISTS / column existence checks.
+        All org_id columns default to 'default' for backward compatibility.
+        """
+        tables_needing_org_id = [
+            "conversations", "user_preferences", "project_contexts",
+            "interaction_patterns", "session_contexts", "knowledge_associations",
+            "kg_entities", "kg_relationships", "user_goals", "archived_memories",
+            "settings", "work_items",
+        ]
+        async with self._session_factory() as session:
+            for table in tables_needing_org_id:
+                # Check if column exists first
+                result = await session.execute(text("""
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = :table AND column_name = 'org_id'
+                """), {"table": table})
+                if result.scalar_one_or_none():
+                    continue
+                # Add the column
+                await session.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN org_id VARCHAR(64) NOT NULL DEFAULT 'default'"
+                ))
+                # Add composite index
+                idx_name = f"idx_{table}_org"
+                await session.execute(text(
+                    f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} (org_id)"
+                ))
+                logger.info(f"Added org_id column to {table}")
+            await session.commit()
+        logger.info("Tenant migration complete — all tables have org_id")
 
     # ── Utility ───────────────────────────────────────────────────
 

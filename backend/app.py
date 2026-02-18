@@ -379,7 +379,8 @@ async def lifespan(app: FastAPI):
     state.db = Database(session_factory)
     await state.db.ensure_summary_table()
     await state.db.ensure_work_items_table()
-    logger.info("Database connected")
+    await state.db.ensure_org_id_columns()
+    logger.info("Database connected (multi-tenant columns ensured)")
 
     # Personal Memory System — knowledge associations, preferences, patterns, goals
     try:

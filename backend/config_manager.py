@@ -649,6 +649,7 @@ class ConfigManager:
         self._session_factory = session_factory
         self.base_dir = base_dir
         self._cache: dict[str, str] = {}
+        self._tenant_cache: dict[str, str] = {}  # "org_id:key" → value
         self._subscribers: list[tuple[set, Callable]] = []
 
     # ── Lifecycle ────────────────────────────────────────────────
@@ -733,6 +734,85 @@ class ConfigManager:
     def get_section(self, category: str) -> dict:
         """Get all settings in a category."""
         return {s["key"]: self.get(s["key"]) for s in SETTINGS_SCHEMA if s["category"] == category}
+
+    # ── Per-Tenant Config (Multi-Tenant) ────────────────────────
+
+    async def get_for_tenant(self, key: str, org_id: str, default: str = "") -> str:
+        """Get a setting with per-tenant override.
+
+        Lookup chain: per-org value → global value → hardcoded default.
+        Single-tenant (org_id='default') always hits the global cache.
+        """
+        if org_id == "default":
+            return self.get(key, default)
+
+        # Check per-tenant override from DB
+        tenant_key = f"{org_id}:{key}"
+        if tenant_key in self._tenant_cache:
+            return self._tenant_cache[tenant_key]
+
+        # Fall through to global
+        return self.get(key, default)
+
+    async def set_for_tenant(self, key: str, value: str, org_id: str, changed_by: str = "admin"):
+        """Set a per-tenant config override.
+
+        For org_id='default', delegates to normal set().
+        For other orgs, stores as a separate row with org_id in the settings table.
+        """
+        if org_id == "default":
+            await self.set(key, value, changed_by=changed_by)
+            return
+
+        schema = _SCHEMA_MAP.get(key)
+        is_encrypted = schema.get("encrypted", False) if schema else False
+        category = schema.get("category", "general") if schema else "general"
+        store_value = encrypt(value) if is_encrypted and value else value
+        now = datetime.now(timezone.utc)
+
+        async with self._session_factory() as session:
+            # Use raw SQL for composite key upsert (key + org_id)
+            from sqlalchemy import text
+            await session.execute(text("""
+                INSERT INTO settings (key, org_id, value, encrypted, category, updated_at, updated_by)
+                VALUES (:key, :org_id, :value, :encrypted, :category, :updated_at, :updated_by)
+                ON CONFLICT (key) DO UPDATE SET
+                    value = EXCLUDED.value,
+                    org_id = EXCLUDED.org_id,
+                    encrypted = EXCLUDED.encrypted,
+                    updated_at = EXCLUDED.updated_at,
+                    updated_by = EXCLUDED.updated_by
+                WHERE settings.org_id = :org_id
+            """), {
+                "key": f"{org_id}:{key}", "org_id": org_id,
+                "value": store_value, "encrypted": is_encrypted,
+                "category": category, "updated_at": now, "updated_by": changed_by,
+            })
+            await session.commit()
+
+        # Update tenant cache
+        self._tenant_cache[f"{org_id}:{key}"] = value
+        logger.info(f"Tenant setting updated: {key} for org={org_id} (by {changed_by})")
+
+    async def load_tenant_overrides(self, org_id: str) -> dict[str, str]:
+        """Load all per-tenant overrides into cache. Returns the overrides dict."""
+        if org_id == "default":
+            return {}
+
+        overrides = {}
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(Setting).where(Setting.org_id == org_id)
+            )
+            for row in result.scalars().all():
+                val = decrypt(row.value) if row.encrypted and row.value else row.value
+                # Strip the org_id prefix from key for cache
+                clean_key = row.key.replace(f"{org_id}:", "", 1) if row.key.startswith(f"{org_id}:") else row.key
+                cache_key = f"{org_id}:{clean_key}"
+                self._tenant_cache[cache_key] = val
+                overrides[clean_key] = val
+
+        return overrides
 
     # ── Write ───────────────────────────────────────────────────
 

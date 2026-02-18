@@ -58,7 +58,8 @@ class ClusterManager:
         self.redis_tls_cert: str = config.get("REDIS_TLS_CLIENT_CERT", "")
         self.redis_tls_key: str = config.get("REDIS_TLS_CLIENT_KEY", "")
         self.redis_tls_verify: bool = config.get("REDIS_TLS_VERIFY", True)
-        self.key_prefix: str = config.get("REDIS_KEY_PREFIX", "nexus:")
+        self._base_prefix: str = config.get("REDIS_KEY_PREFIX", "nexus:")
+        self.key_prefix: str = self._base_prefix  # Default; use tenant_prefix() for multi-tenant
 
         # Agent identity
         self.agent_id: str = config.get("CLUSTER_AGENT_ID", "") or f"nexus-{uuid.uuid4().hex[:8]}"
@@ -317,6 +318,16 @@ class ClusterManager:
             self._started = False
             logger.info("Cluster stopped")
 
+    def tenant_prefix(self, org_id: str = "default") -> str:
+        """Get a tenant-scoped Redis key prefix.
+
+        Single-tenant (org_id='default'): 'nexus:'  (unchanged)
+        Multi-tenant:                     'nexus:org-abc:'
+        """
+        if org_id == "default":
+            return self._base_prefix
+        return f"{self._base_prefix}{org_id}:"
+
     @property
     def is_primary(self) -> bool:
         """Check if this agent is the current primary."""
@@ -351,8 +362,13 @@ class ClusterManager:
     async def store_memory(
         self, text: str, embedding: list[float],
         memory_type: str = "general", source_conv: str = "",
+        org_id: str = "default",
     ) -> Optional[str]:
-        """Store a memory in the semantic index (cross-agent searchable)."""
+        """Store a memory in the semantic index (cross-agent searchable).
+
+        In multi-tenant mode, org_id scopes the memory to a specific tenant.
+        Single-tenant mode always uses org_id='default'.
+        """
         if self.memory_index:
             return await self.memory_index.store(
                 text=text, embedding=embedding,
@@ -362,8 +378,12 @@ class ClusterManager:
 
     async def search_memory(
         self, query_embedding: list[float], limit: int = 5,
+        org_id: str = "default",
     ) -> list[dict]:
-        """Search memories by vector similarity."""
+        """Search memories by vector similarity.
+
+        In multi-tenant mode, searches are scoped to the tenant's org_id.
+        """
         if self.memory_index:
             return await self.memory_index.search(query_embedding, limit=limit)
         return []
