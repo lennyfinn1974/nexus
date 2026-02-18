@@ -11,11 +11,14 @@ import json
 import logging
 import re
 import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from core.context_manager import get_context_limit
 from core.errors import AgentAbortError, classify_error
+from core.logging_config import get_turn_id
 from core.message_formatter import MessageFormatter
+from core.metrics import get_metrics
 from core.tool_result_truncation import truncate_tool_result
 from websocket_manager import websocket_manager
 
@@ -171,6 +174,9 @@ class AgentAttempt:
         """
         state = self.runner.state
         tools = None if suppress_tools else self.tools_for_api
+        metrics = get_metrics()
+
+        inference_start = time.time()
 
         model_name, stream = await state.model_router.chat_stream(
             self.messages,
@@ -179,6 +185,9 @@ class AgentAttempt:
             tools=tools,
         )
         self.model_name = model_name
+
+        # Track model provider call
+        metrics.record_count(f"{model_name}_calls")
 
         if send_stream_lifecycle:
             await websocket_manager.send_to_client(
@@ -201,6 +210,7 @@ class AgentAttempt:
                     await websocket_manager.send_to_client(
                         self.ws_id, {"type": "stream_end", "model": model_name}
                     )
+                metrics.record_count("aborts")
                 raise AgentAbortError("Request aborted by user")
 
             if isinstance(chunk, dict) and chunk.get("type") == "tool_use":
@@ -233,6 +243,10 @@ class AgentAttempt:
                 self.ws_id, {"type": "stream_end", "model": model_name}
             )
 
+        # Record model inference timing
+        inference_ms = int((time.time() - inference_start) * 1000)
+        metrics.record("model_inference", inference_ms)
+
         return full_response, native_tool_calls
 
     async def _execute_tools(
@@ -244,10 +258,14 @@ class AgentAttempt:
 
         Tries native tool calls first, falls back to legacy regex parsing
         on the full response text. Returns empty list if no tools were called.
+
+        Each tool execution gets a span_id for tracing (C3).
         """
         state = self.runner.state
         tool_executor = getattr(state, "tool_executor", None)
         tool_results: list[dict] = []
+        metrics = get_metrics()
+        turn_id = get_turn_id()
 
         # Native tool calls (Anthropic or Ollama)
         if native_tool_calls and tool_executor:
@@ -255,13 +273,19 @@ class AgentAttempt:
                 tool_name = tc.get("name", "")
                 tool_input = tc.get("input", {})
                 tool_id = tc.get("id", "")
+                span_id = uuid.uuid4().hex[:8]
 
                 # Send tool status as a non-visible event (not a system message)
-                # The chat UI shows a typing indicator during streaming instead
                 await websocket_manager.send_to_client(
                     self.ws_id,
                     {"type": "tool_status", "tool": tool_name, "status": "running"},
                 )
+
+                logger.info(
+                    f"tool_start {turn_id} {span_id} {tool_name} "
+                    f"{json.dumps(tool_input, default=str)[:200]}"
+                )
+                tool_start = time.time()
 
                 try:
                     parsed_call = tool_executor.parse_anthropic_tool_call({
@@ -270,12 +294,21 @@ class AgentAttempt:
                         "input": tool_input,
                     })
                     result = await tool_executor.execute(parsed_call)
+
+                    tool_ms = int((time.time() - tool_start) * 1000)
+                    metrics.record("tool_execution", tool_ms)
+                    metrics.record_count("tool_calls")
+
                     if result.success:
                         tool_results.append({
                             "tool": tool_name,
                             "result": result.result,
                             "tool_use_id": tool_id,
                         })
+                        logger.info(
+                            f"tool_end {turn_id} {span_id} {tool_name} "
+                            f"{tool_ms}ms ok len={len(result.result or '')}"
+                        )
                         # Capture web tool results for memory ingestion
                         if tool_name in self.WEB_TOOLS:
                             self.web_results.append({
@@ -289,8 +322,20 @@ class AgentAttempt:
                             "error": result.error,
                             "tool_use_id": tool_id,
                         })
+                        metrics.record_count("tool_errors")
+                        logger.info(
+                            f"tool_end {turn_id} {span_id} {tool_name} "
+                            f"{tool_ms}ms error={result.error}"
+                        )
                 except Exception as exc:
-                    logger.error(f"Native tool {tool_name} failed: {exc}")
+                    tool_ms = int((time.time() - tool_start) * 1000)
+                    metrics.record("tool_execution", tool_ms)
+                    metrics.record_count("tool_calls")
+                    metrics.record_count("tool_errors")
+                    logger.error(
+                        f"tool_end {turn_id} {span_id} {tool_name} "
+                        f"{tool_ms}ms exception={exc}"
+                    )
                     tool_results.append({
                         "tool": tool_name,
                         "error": str(exc),

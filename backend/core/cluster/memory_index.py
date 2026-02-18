@@ -781,6 +781,143 @@ class MemoryIndex:
 
         return memories
 
+    # ── Importance Scoring & Pruning (Phase B) ──────────────────
+
+    # Type weights for importance scoring
+    _TYPE_WEIGHTS = {
+        "skill_knowledge": 1.5,
+        "fact": 1.3,
+        "document": 1.2,
+        "web_content": 1.0,
+        "preference": 1.2,
+        "project": 1.1,
+        "conversation": 0.7,
+        "general": 0.8,
+    }
+
+    # Half-life for recency decay (days)
+    _RECENCY_HALF_LIFE = 30.0
+
+    # Protected memory types — never pruned if access_count > threshold
+    _PROTECTED_MIN_ACCESSES = 5
+    _PROTECTED_TYPES = {"skill_knowledge", "fact"}
+
+    def compute_importance(self, memory: dict) -> float:
+        """Compute importance score for a memory.
+
+        Formula: access_count * recency_weight * type_weight
+        where recency_weight = 0.5^(days_since_last_access / half_life)
+
+        Higher score = more important.
+        """
+        access_count = max(int(memory.get("access_count", 0)), 1)
+        mem_type = memory.get("memory_type", "general")
+        last_accessed = float(memory.get("last_accessed", memory.get("created_at", 0)))
+
+        # Recency decay
+        now = time.time()
+        days_since = (now - last_accessed) / 86400.0 if last_accessed else 365.0
+        recency_weight = 0.5 ** (days_since / self._RECENCY_HALF_LIFE)
+
+        # Type weight
+        type_weight = self._TYPE_WEIGHTS.get(mem_type, 0.8)
+
+        return access_count * recency_weight * type_weight
+
+    async def prune(
+        self,
+        max_memories: int = 10000,
+        min_importance: float = 0.01,
+    ) -> int:
+        """Prune low-importance memories when count exceeds max.
+
+        Strategy:
+            1. Scan all memories and compute importance scores
+            2. If count > max_memories, delete bottom 10%
+            3. Never prune protected types with high access counts
+            4. Returns number of memories pruned
+
+        Wire as periodic task (every 6 hours).
+        """
+        all_mems = await self.scan_all_with_access()
+        total = len(all_mems)
+
+        if total <= max_memories:
+            return 0
+
+        # Compute importance for each
+        for mem in all_mems:
+            mem["_importance"] = self.compute_importance(mem)
+
+        # Sort by importance (lowest first — prune candidates)
+        all_mems.sort(key=lambda m: m["_importance"])
+
+        # How many to prune (bottom 10% of overage)
+        overage = total - max_memories
+        prune_count = max(overage, total // 10)
+
+        pruned = 0
+        for mem in all_mems:
+            if pruned >= prune_count:
+                break
+
+            # Skip protected memories
+            mem_type = mem.get("memory_type", "")
+            access_count = int(mem.get("access_count", 0))
+            if mem_type in self._PROTECTED_TYPES and access_count >= self._PROTECTED_MIN_ACCESSES:
+                continue
+
+            # Skip if above minimum importance
+            if mem["_importance"] >= min_importance and pruned >= overage:
+                break
+
+            mem_id = mem.get("id")
+            if mem_id:
+                try:
+                    await self.delete_memory(mem_id)
+                    pruned += 1
+                except Exception as e:
+                    logger.debug(f"Prune skip {mem_id}: {e}")
+
+        if pruned > 0:
+            logger.info(
+                f"Memory pruning: removed {pruned}/{total} memories "
+                f"(max={max_memories}, overage={overage})"
+            )
+
+        return pruned
+
+    async def scan_all_with_access(self) -> list[dict[str, Any]]:
+        """Scan all memories with access metadata for importance scoring."""
+        memories = []
+        pattern = self._mem_pattern()
+
+        async for key in self._redis.scan_iter(match=pattern, count=100):
+            try:
+                data = await self._redis.hmget(
+                    key, "id", "memory_type", "created_at",
+                    "access_count", "last_accessed"
+                )
+                if not data or not data[0]:
+                    continue
+
+                def _d(v):
+                    if v is None:
+                        return ""
+                    return v.decode("utf-8") if isinstance(v, bytes) else v
+
+                memories.append({
+                    "id": _d(data[0]),
+                    "memory_type": _d(data[1]),
+                    "created_at": float(_d(data[2])) if data[2] else 0,
+                    "access_count": int(_d(data[3])) if data[3] else 0,
+                    "last_accessed": float(_d(data[4])) if data[4] else 0,
+                })
+            except Exception:
+                continue
+
+        return memories
+
     async def count_memories(self) -> int:
         """Count total memories in the index."""
         if self._backend == self.BACKEND_VSIM:

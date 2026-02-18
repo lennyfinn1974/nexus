@@ -221,6 +221,16 @@ async def _handle_kg_save_task(payload: dict, state: AppState) -> str:
     return f"KG save: {saved} items"
 
 
+async def _handle_memory_prune_task(payload: dict, state: AppState) -> str:
+    """Periodic task: prune low-importance memories from Redis vector index."""
+    cm = getattr(state, "cluster_manager", None)
+    if not cm or not cm.is_active or not cm.memory_index:
+        return "Memory index not active"
+    max_memories = payload.get("max_memories", 10000)
+    pruned = await cm.memory_index.prune(max_memories=max_memories)
+    return f"Pruned {pruned} memories"
+
+
 async def _handle_ingest_task(payload: dict, state: AppState) -> str:
     file_path = payload.get("path", "")
     filename = payload.get("name", os.path.basename(file_path))
@@ -473,6 +483,7 @@ async def lifespan(app: FastAPI):
     state.task_queue.register_handler("ingest", lambda p: _handle_ingest_task(p, state))
     state.task_queue.register_handler("cleanup", lambda p: _handle_cleanup_task(p, state))
     state.task_queue.register_handler("kg_save", lambda p: _handle_kg_save_task(p, state))
+    state.task_queue.register_handler("memory_prune", lambda p: _handle_memory_prune_task(p, state))
 
     # Connect task queue to distributed stream if clustering is active
     if state.cluster_manager and state.cluster_manager.task_stream:
@@ -499,6 +510,13 @@ async def lifespan(app: FastAPI):
         task_type="kg_save",
         interval_seconds=5 * 60,  # Every 5 minutes
         payload={},
+        enabled=True,
+    )
+    state.task_queue.register_periodic(
+        name="memory_prune",
+        task_type="memory_prune",
+        interval_seconds=6 * 60 * 60,  # Every 6 hours
+        payload={"max_memories": 10000},
         enabled=True,
     )
     state.task_queue.start_scheduler()

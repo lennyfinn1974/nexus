@@ -1874,3 +1874,38 @@ async def revoke_session(session_id: str, request: Request):
             "token_revoked", details=f"session={session_id}", ip_address=request.client.host if request.client else ""
         )
     return JSONResponse({"ok": True, "session_id": session_id})
+
+
+# ── Metrics Dashboard (Phase C) ───────────────────────────────
+
+
+@router.get("/metrics")
+async def get_metrics_dashboard():
+    """Unified metrics dashboard — latency percentiles, counters, system health.
+
+    Returns aggregated observability data from the MetricsCollector singleton.
+    """
+    from core.metrics import get_metrics
+
+    metrics = get_metrics()
+    dashboard = metrics.dashboard()
+
+    # Enrich with subsystem stats
+    if app_state:
+        rag = getattr(app_state, "rag_pipeline", None)
+        if rag:
+            dashboard["rag"] = rag.get_stats()
+
+        kg = getattr(app_state, "knowledge_graph", None)
+        if kg:
+            dashboard["knowledge_graph"] = kg.get_stats()
+
+        bulletin = getattr(app_state, "memory_bulletin", None)
+        if bulletin:
+            dashboard["memory_bulletin"] = bulletin.get_stats()
+
+        pm = getattr(app_state, "plugin_manager", None)
+        if pm:
+            dashboard["plugin_audit"] = pm.get_audit_summary()
+
+    return JSONResponse(dashboard)

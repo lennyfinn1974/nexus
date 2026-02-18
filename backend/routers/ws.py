@@ -12,10 +12,12 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from typing import Any
 
 from core.agent_runner import AgentRunner
+from core.logging_config import clear_turn_context, new_turn_id, set_turn_context
 from core.message_processor import process_message
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from websocket_manager import websocket_manager
@@ -630,6 +632,11 @@ async def _handle_user_message(
 
     Returns the runner so the caller can set abort if needed.
     """
+    # Set turn trace context — flows through all loggers via ContextFilter
+    turn_id = new_turn_id()
+    set_turn_context(turn_id=turn_id, conv_id=conv_id, ws_id=ws_id)
+    turn_start = time.time()
+
     await s.db.add_message(conv_id, "user", text)
 
     # Auto-title after first message
@@ -674,6 +681,24 @@ async def _handle_user_message(
         logger.warning(f"Agent run failed (memory hooks will still fire): {e}")
         raise
     finally:
+        # ── Turn summary log (C5) ──
+        turn_ms = int((time.time() - turn_start) * 1000)
+        try:
+            from core.metrics import get_metrics
+            metrics = get_metrics()
+            metrics.record("total_turn", turn_ms)
+            metrics.record_count("turns")
+
+            # Emit structured turn summary
+            attempt = getattr(runner, "_attempt", None)
+            model_used = getattr(attempt, "model_name", "unknown") if attempt else "unknown"
+            logger.info(
+                f"turn_summary: {turn_id} model={model_used} "
+                f"total_ms={turn_ms} response_len={len(final_response)}"
+            )
+        except Exception:
+            pass
+
         # ── Post-response hooks (always run, even on error) ──
 
         # Cluster: update session + release work
@@ -691,9 +716,6 @@ async def _handle_user_message(
 
         # Only run memory hooks if we have a meaningful response
         if final_response and len(final_response) > 20:
-            # Run all memory hooks in a single sequenced background task.
-            # This prevents 4 parallel embedding calls from competing with
-            # the user's next inference request on the Ollama slot.
             passive_mem = getattr(s, "passive_memory", None)
             rag_pipeline = getattr(s, "rag_pipeline", None)
             knowledge_graph = getattr(s, "knowledge_graph", None)
@@ -710,11 +732,14 @@ async def _handle_user_message(
                     text=text,
                     final_response=final_response,
                     web_results=web_results,
-                    model_router=state.model_router,
+                    model_router=s.model_router,
                 )
             )
         else:
             logger.info(f"Memory hooks skipped: response too short ({len(final_response)} chars)")
+
+        # Clear turn trace context
+        clear_turn_context()
 
     return runner
 

@@ -25,6 +25,8 @@ from core.errors import (
     RateLimitError,
     classify_error,
 )
+from core.logging_config import get_turn_id
+from core.metrics import get_metrics
 from core.system_prompt import build_system_prompt
 from websocket_manager import websocket_manager
 
@@ -276,6 +278,7 @@ class AgentRunner:
                 continue  # Try next model candidate
 
             except (ModelTimeoutError, RateLimitError, ModelUnavailableError) as exc:
+                get_metrics().record_count("failovers")
                 logger.warning(f"{model_name} failed ({exc.error_type}), trying next candidate")
                 if attempt_idx + 1 < len(candidates):
                     await websocket_manager.send_to_client(

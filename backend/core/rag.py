@@ -245,6 +245,15 @@ class RAGPipeline:
             self._total_retrievals += 1
             self._total_retrieve_ms += total_ms
 
+            # Record metrics
+            try:
+                from core.metrics import get_metrics
+                m = get_metrics()
+                m.record("rag_retrieve", total_ms)
+                m.record("embed", embed_ms)
+            except Exception:
+                pass
+
             types_found = ", ".join(
                 sorted(set(r.get("memory_type", "?") for r in filtered))
             )
@@ -349,6 +358,14 @@ class RAGPipeline:
             self._total_retrievals += 1
             self._total_hybrid_retrievals += 1
             self._total_retrieve_ms += total_ms
+
+            # Record metrics
+            try:
+                from core.metrics import get_metrics
+                m = get_metrics()
+                m.record("rag_retrieve", total_ms)
+            except Exception:
+                pass
 
             logger.info(
                 f"RAG hybrid retrieve: {len(top)} results for '{query[:60]}' "
