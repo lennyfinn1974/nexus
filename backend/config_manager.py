@@ -599,6 +599,17 @@ SETTINGS_SCHEMA: list[dict] = [
         "min": 0,
         "max": 10,
     },
+    # Memory
+    {
+        "key": "MEMORY_DEDUP_THRESHOLD",
+        "default": "0.12",
+        "encrypted": False,
+        "category": "Memory",
+        "label": "Dedup Similarity Threshold",
+        "type": "select",
+        "description": "Cosine distance below this = duplicate. Strict (0.08) for business data, Loose (0.18) for creative content.",
+        "options": ["0.08", "0.10", "0.12", "0.15", "0.18"],
+    },
     # Setup
     {
         "key": "SETUP_COMPLETE",
@@ -1042,4 +1053,5 @@ class ConfigManager:
             "CLUSTER_ELECTION_TIMEOUT": self.cluster_election_timeout,
             "CLUSTER_MIN_SECONDARIES": int(self.get("CLUSTER_MIN_SECONDARIES", "0")),
             "CLUSTER_VECTOR_DIMS": int(self.get("EMBEDDING_DIMS", "768")),
+            "MEMORY_DEDUP_THRESHOLD": float(self.get("MEMORY_DEDUP_THRESHOLD", "0.12")),
         }

@@ -403,6 +403,30 @@ class TelegramPairing(Base):
     )
 
 
+# ── Memory Archival Tables ────────────────────────────────────
+
+
+class ArchivedMemory(Base):
+    """Archived memories moved from Redis vector store to cold PostgreSQL storage."""
+    __tablename__ = "archived_memories"
+
+    id = Column(String, primary_key=True)
+    text = Column(Text, nullable=False)
+    memory_type = Column(String, nullable=False, default="general")
+    source_agent = Column(String, nullable=True)
+    source_conv = Column(String, nullable=True)
+    importance = Column(Float, default=0.0)
+    access_count = Column(Integer, default=0)
+    original_created_at = Column(DateTime(timezone=True), nullable=True)
+    archived_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    metadata_ = Column("metadata", JSONB, nullable=True)
+
+    __table_args__ = (
+        Index("idx_archived_mem_type", "memory_type"),
+        Index("idx_archived_mem_date", "archived_at"),
+    )
+
+
 class PairingCode(Base):
     __tablename__ = "pairing_codes"
 

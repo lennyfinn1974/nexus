@@ -75,6 +75,7 @@ class ClusterManager:
         self.working_memory_ttl: int = int(config.get("CLUSTER_WORKING_MEMORY_TTL", 3600))
         self.vector_dims: int = int(config.get("CLUSTER_VECTOR_DIMS", 1536))
         self.memory_promotion_delay: int = int(config.get("CLUSTER_MEMORY_PROMOTION_DELAY", 300))
+        self.dedup_threshold: float = float(config.get("MEMORY_DEDUP_THRESHOLD", 0.12))
 
         # State
         self._redis = None
@@ -194,6 +195,7 @@ class ClusterManager:
                 prefix=self.key_prefix,
                 agent_id=self.agent_id,
                 vector_dims=self.vector_dims,
+                dedup_threshold=self.dedup_threshold,
             )
 
             self.election_manager = ElectionManager(

@@ -231,6 +231,24 @@ async def _handle_memory_prune_task(payload: dict, state: AppState) -> str:
     return f"Pruned {pruned} memories"
 
 
+async def _handle_memory_archive_task(payload: dict, state: AppState) -> str:
+    """Periodic task: archive old low-importance memories to PostgreSQL."""
+    cm = getattr(state, "cluster_manager", None)
+    if not cm or not cm.is_active or not cm.memory_index:
+        return "Memory index not active"
+    sf = getattr(state, "session_factory", None)
+    if not sf:
+        return "No database session factory"
+    max_importance = payload.get("max_importance", 0.05)
+    min_age_days = payload.get("min_age_days", 90.0)
+    archived = await cm.memory_index.archive(
+        session_factory=sf,
+        max_importance=max_importance,
+        min_age_days=min_age_days,
+    )
+    return f"Archived {archived} memories"
+
+
 async def _handle_ingest_task(payload: dict, state: AppState) -> str:
     file_path = payload.get("path", "")
     filename = payload.get("name", os.path.basename(file_path))
@@ -335,6 +353,7 @@ async def lifespan(app: FastAPI):
     await create_all_tables()
 
     session_factory = get_session_factory()
+    state.session_factory = session_factory  # Shared with periodic tasks (archival)
     logger.info("Database engine initialized")
 
     # Config Manager
@@ -484,6 +503,7 @@ async def lifespan(app: FastAPI):
     state.task_queue.register_handler("cleanup", lambda p: _handle_cleanup_task(p, state))
     state.task_queue.register_handler("kg_save", lambda p: _handle_kg_save_task(p, state))
     state.task_queue.register_handler("memory_prune", lambda p: _handle_memory_prune_task(p, state))
+    state.task_queue.register_handler("memory_archive", lambda p: _handle_memory_archive_task(p, state))
 
     # Connect task queue to distributed stream if clustering is active
     if state.cluster_manager and state.cluster_manager.task_stream:
@@ -517,6 +537,13 @@ async def lifespan(app: FastAPI):
         task_type="memory_prune",
         interval_seconds=6 * 60 * 60,  # Every 6 hours
         payload={"max_memories": 10000},
+        enabled=True,
+    )
+    state.task_queue.register_periodic(
+        name="memory_archive",
+        task_type="memory_archive",
+        interval_seconds=24 * 60 * 60,  # Daily
+        payload={"max_importance": 0.05, "min_age_days": 90.0},
         enabled=True,
     )
     state.task_queue.start_scheduler()

@@ -1908,4 +1908,14 @@ async def get_metrics_dashboard():
         if pm:
             dashboard["plugin_audit"] = pm.get_audit_summary()
 
+        # Memory archival stats
+        cm = getattr(app_state, "cluster_manager", None)
+        sf = getattr(app_state, "session_factory", None)
+        if cm and cm.memory_index and sf:
+            try:
+                archive_stats = await cm.memory_index.get_archive_stats(session_factory=sf)
+                dashboard["memory_archive"] = archive_stats
+            except Exception:
+                pass
+
     return JSONResponse(dashboard)

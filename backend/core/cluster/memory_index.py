@@ -92,17 +92,24 @@ class MemoryIndex:
     BACKEND_REDISEARCH = "redisearch"  # FT.CREATE / FT.SEARCH
     BACKEND_SCAN = "scan"         # Brute-force fallback
 
+    # Dedup threshold presets (cosine distance)
+    DEDUP_DEFAULT = 0.12   # Standard dedup
+    DEDUP_STRICT = 0.08    # Business data (many similar records)
+    DEDUP_LOOSE = 0.18     # Creative/diverse content
+
     def __init__(
         self,
         redis,
         prefix: str,
         agent_id: str,
         vector_dims: int = DEFAULT_VECTOR_DIMS,
+        dedup_threshold: float = None,
     ):
         self._redis = redis
         self._prefix = prefix
         self.agent_id = agent_id
         self.vector_dims = vector_dims
+        self.dedup_threshold = dedup_threshold or SIMILARITY_THRESHOLD
 
         self._index_name = f"{prefix}{INDEX_NAME_SUFFIX}"
         self._vectorset_key = f"{prefix}{VECTORSET_NAME_SUFFIX}"
@@ -344,7 +351,7 @@ class MemoryIndex:
         # Stage 3: Semantic dedup (if search backend available)
         if self._backend != self.BACKEND_SCAN:
             similar = await self.search(embedding, limit=1)
-            if similar and similar[0]["score"] < SIMILARITY_THRESHOLD:
+            if similar and similar[0]["score"] < self.dedup_threshold:
                 self._duplicates_found += 1
                 logger.debug(
                     f"Semantic duplicate found: score={similar[0]['score']:.4f} "
@@ -917,6 +924,182 @@ class MemoryIndex:
                 continue
 
         return memories
+
+    # ── Archival (Phase B3) ──────────────────────────────────────
+
+    async def archive(
+        self,
+        session_factory=None,
+        max_importance: float = 0.05,
+        min_age_days: float = 90.0,
+    ) -> int:
+        """Archive low-importance old memories from Redis to PostgreSQL.
+
+        Moves memories with importance < max_importance AND
+        last_accessed > min_age_days ago into the archived_memories table,
+        then deletes them from Redis.
+
+        Returns number of memories archived.
+        """
+        if session_factory is None:
+            return 0
+
+        all_mems = await self.scan_all_with_access()
+        now = time.time()
+        age_threshold = now - (min_age_days * 86400.0)
+
+        candidates = []
+        for mem in all_mems:
+            importance = self.compute_importance(mem)
+            last_accessed = mem.get("last_accessed", 0) or mem.get("created_at", 0)
+
+            if importance < max_importance and last_accessed < age_threshold:
+                # Skip protected types
+                if (mem.get("memory_type") in self._PROTECTED_TYPES
+                        and int(mem.get("access_count", 0)) >= self._PROTECTED_MIN_ACCESSES):
+                    continue
+                mem["_importance"] = importance
+                candidates.append(mem)
+
+        if not candidates:
+            return 0
+
+        # Fetch full text for archival, then move to PostgreSQL
+        from datetime import datetime, timezone
+        from storage.models import ArchivedMemory
+
+        archived = 0
+        async with session_factory() as session:
+            for mem in candidates:
+                mem_id = mem["id"]
+                try:
+                    # Get full memory data from Redis
+                    key = self._mem_key(mem_id)
+                    data = await self._redis.hmget(
+                        key, "id", "text", "memory_type", "source_agent",
+                        "source_conv", "created_at", "access_count"
+                    )
+                    if not data or not data[0]:
+                        continue
+
+                    def _d(v):
+                        return v.decode("utf-8") if isinstance(v, bytes) else (v or "")
+
+                    text = _d(data[1])
+                    if not text:
+                        continue
+
+                    created_ts = float(_d(data[5])) if data[5] else 0
+                    original_created = (
+                        datetime.fromtimestamp(created_ts, tz=timezone.utc)
+                        if created_ts > 0 else None
+                    )
+
+                    archived_mem = ArchivedMemory(
+                        id=mem_id,
+                        text=text,
+                        memory_type=_d(data[2]),
+                        source_agent=_d(data[3]) or None,
+                        source_conv=_d(data[4]) or None,
+                        importance=mem.get("_importance", 0.0),
+                        access_count=int(_d(data[6])) if data[6] else 0,
+                        original_created_at=original_created,
+                    )
+
+                    # Use merge to handle re-archival of same ID
+                    session.add(archived_mem)
+
+                    # Delete from Redis
+                    await self.delete_memory(mem_id)
+                    archived += 1
+
+                except Exception as e:
+                    logger.debug(f"Archive skip {mem_id}: {e}")
+
+            if archived > 0:
+                await session.commit()
+                logger.info(
+                    f"Memory archival: moved {archived}/{len(candidates)} memories "
+                    f"to PostgreSQL (importance<{max_importance}, age>{min_age_days}d)"
+                )
+
+        return archived
+
+    async def unarchive(self, memory_id: str, session_factory=None, embedding_fn=None) -> bool:
+        """Restore an archived memory from PostgreSQL back to Redis.
+
+        Requires an embedding function to re-embed the text.
+        Returns True if successfully restored.
+        """
+        if session_factory is None or embedding_fn is None:
+            return False
+
+        from sqlalchemy import select
+        from storage.models import ArchivedMemory
+
+        async with session_factory() as session:
+            result = await session.execute(
+                select(ArchivedMemory).where(ArchivedMemory.id == memory_id)
+            )
+            archived = result.scalar_one_or_none()
+            if not archived:
+                return False
+
+            # Re-embed the text
+            try:
+                embedding = await embedding_fn(archived.text)
+            except Exception as e:
+                logger.error(f"Failed to re-embed archived memory {memory_id}: {e}")
+                return False
+
+            # Store back in Redis
+            restored_id = await self.store(
+                text=archived.text,
+                embedding=embedding,
+                memory_type=archived.memory_type,
+                source_conv=archived.source_conv or "",
+                memory_id=memory_id,  # Preserve original ID
+            )
+
+            if restored_id:
+                # Delete from archive table
+                from sqlalchemy import delete as sql_delete
+                await session.execute(
+                    sql_delete(ArchivedMemory).where(ArchivedMemory.id == memory_id)
+                )
+                await session.commit()
+                logger.info(f"Unarchived memory {memory_id}")
+                return True
+
+        return False
+
+    async def get_archive_stats(self, session_factory=None) -> dict:
+        """Get archive statistics."""
+        if session_factory is None:
+            return {"archived_count": 0}
+
+        from sqlalchemy import func, select
+        from storage.models import ArchivedMemory
+
+        async with session_factory() as session:
+            result = await session.execute(
+                select(func.count(ArchivedMemory.id))
+            )
+            count = result.scalar() or 0
+
+            # Get type breakdown
+            type_result = await session.execute(
+                select(
+                    ArchivedMemory.memory_type,
+                    func.count(ArchivedMemory.id)
+                ).group_by(ArchivedMemory.memory_type)
+            )
+            types = {row[0]: row[1] for row in type_result}
+
+            return {
+                "archived_count": count,
+                "by_type": types,
+            }
 
     async def count_memories(self) -> int:
         """Count total memories in the index."""

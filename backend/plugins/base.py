@@ -29,6 +29,8 @@ class ToolInfo:
     parameters: dict = field(default_factory=dict)
     handler: Callable | None = None
     category: str = "general"
+    side_effects: bool = False  # True = write/mutate, False = read-only
+    timeout_seconds: float = 30.0  # Per-tool execution timeout
 
 
 class NexusPlugin(abc.ABC):
@@ -108,6 +110,8 @@ class NexusPlugin(abc.ABC):
         parameters: dict,
         handler: Callable,
         category: str = "general",
+        side_effects: bool = False,
+        timeout_seconds: float = 30.0,
     ) -> None:
         """Register a tool that the AI can call."""
         self.tools.append(
@@ -117,6 +121,8 @@ class NexusPlugin(abc.ABC):
                 parameters=parameters,
                 handler=handler,
                 category=category,
+                side_effects=side_effects,
+                timeout_seconds=timeout_seconds,
             )
         )
 
